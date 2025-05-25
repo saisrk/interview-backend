@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 import logging
 from dotenv import load_dotenv
-import re
+import re, bcrypt
 from prompt_generator import InterviewConfig, generate_prompt
 
 # Configure logging
@@ -343,12 +343,36 @@ async def initialize_database():
         research_data JSONB NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
+    -- Auth Users Table
+    CREATE TABLE IF NOT EXISTS auth_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email VARCHAR NOT NULL UNIQUE,
+        password_hash VARCHAR NOT NULL,
+        full_name VARCHAR,
+        role VARCHAR DEFAULT 'candidate',
+        preferences JSONB DEFAULT '{}',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        last_login TIMESTAMP WITH TIME ZONE
+    );
+
+    -- Auth Sessions Table
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES auth_users(id) ON DELETE CASCADE,
+        access_token VARCHAR NOT NULL,
+        refresh_token VARCHAR NOT NULL,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
 
     -- Create indexes for better performance
     CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON interview_sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON interview_sessions(created_at);
     CREATE INDEX IF NOT EXISTS idx_questions_session_id ON interview_questions(session_id);
     CREATE INDEX IF NOT EXISTS idx_answers_session_id ON interview_answers(session_id);
+    CREATE INDEX IF NOT EXISTS idx_auth_users_email ON auth_users(email);
+    CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_auth_sessions_access_token ON auth_sessions(access_token);
     """
     
     logger.info("Database schema initialized (run via Supabase dashboard)")
@@ -372,7 +396,7 @@ async def ask_sonar(prompt: str) -> str:
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
     
-    
+
 async def get_current_user(authorization: str = Header(None)) -> dict:
     """Get current user from access token"""
     if not authorization or not authorization.startswith("Bearer "):
@@ -406,9 +430,12 @@ async def signup(req: AuthRequest):
             raise HTTPException(status_code=400, detail="Invalid email format")
 
         # Check if user already exists
-        existing_user = supabase.table("profiles").select("id").eq("email", req.email).execute()
+        existing_user = supabase.table("auth_users").select("id").eq("email", req.email).execute()
         if existing_user.data:
             raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Create password hash
+        password_hash = bcrypt.hashpw(req.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
         # Create auth user
         auth_response = supabase.auth.sign_up({
@@ -429,6 +456,7 @@ async def signup(req: AuthRequest):
         profile_data = {
             "id": auth_response.user.id,
             "email": req.email,
+            "password_hash": password_hash,
             "full_name": req.full_name,
             "role": req.role or "candidate",
             "created_at": datetime.utcnow().isoformat(),
@@ -439,7 +467,7 @@ async def signup(req: AuthRequest):
             }
         }
 
-        profile_result = supabase.table("profiles").insert(profile_data).execute()
+        profile_result = supabase.table("auth_users").insert(profile_data).execute()
         
         if not profile_result.data:
             # Rollback auth user creation if profile creation fails

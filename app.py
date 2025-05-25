@@ -22,6 +22,7 @@ from sqlalchemy.orm import sessionmaker
 import logging
 from dotenv import load_dotenv
 import re
+from prompt_generator import InterviewConfig, generate_prompt
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -352,6 +353,43 @@ async def initialize_database():
     
     logger.info("Database schema initialized (run via Supabase dashboard)")
 
+
+# ---------------------- Sonar Integration ----------------------
+async def ask_sonar(prompt: str) -> str:
+    headers = {
+        "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    body = {
+        "model": "sonar-small-chat",
+        "messages": [
+            {"role": "system", "content": "You are a professional AI interviewer."},
+            {"role": "user", "content": prompt}
+        ]
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.post("https://api.perplexity.ai/chat/completions", headers=headers, json=body)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    
+    
+async def get_current_user(authorization: str = Header(None)) -> dict:
+    """Get current user from access token"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    
+    try:
+        token = authorization.split(" ")[1]
+        user = supabase.auth.get_user(token)
+        
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid token")
+            
+        return user
+    except Exception as e:
+        logger.error(f"Token validation error: {str(e)}")
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
 # API Endpoints
 
 @app.get("/healthcheck")
@@ -499,66 +537,32 @@ async def logout(current_user: dict = Depends(get_current_user)):
         logger.error(f"Logout error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to logout")
 
-async def get_current_user(authorization: str = Header(None)) -> dict:
-    """Get current user from access token"""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-    
-    try:
-        token = authorization.split(" ")[1]
-        user = supabase.auth.get_user(token)
-        
-        if not user:
-            raise HTTPException(status_code=401, detail="Invalid token")
-            
-        return user
-    except Exception as e:
-        logger.error(f"Token validation error: {str(e)}")
-        raise HTTPException(status_code=401, detail="Invalid token")
-
 # ------------------------- 🎯 Core Interview APIs ----------------------------
 
 @app.post("/api/sessions/start")
 async def start_interview_session(request: SessionRequest, background_tasks: BackgroundTasks):
     """Start a new interview session with Supabase persistence"""
     session_id = str(uuid.uuid4())
-    
-    # Create session record in Supabase
-    session_data = {
-        "id": session_id,
-        "user_id": request.user_id,
-        "domain": request.domain.value,
-        "experience_level": request.experience_level.value,
-        "interview_type": request.interview_type.value,
-        "duration_minutes": request.duration_minutes,
-        "company_name": request.company_name,
-        "job_title": request.job_title,
-        "status": "active",
-        "current_question_index": 0,
-        "created_at": datetime.utcnow().isoformat()
-    }
-    
-    await db.create_session(session_data)
-    
-    # Generate questions using Sonar Pro
-    questions_query = f"""
-    Generate 8-10 comprehensive {request.interview_type.value} interview questions for a {request.experience_level.value} 
-    {request.domain.value} role. Include:
-    1. Current industry trends and technologies from 2024-2025
-    2. Mix of difficulty levels (easy, medium, hard)
-    3. Practical scenarios and problem-solving questions
-    4. Behavioral aspects relevant to the role
-    
-    Format each question clearly with difficulty level and any context needed.
-    Focus on real-world applications and current market demands.
-    """
+    now = datetime.utcnow().isoformat()
+    config = InterviewConfig(
+        domain=request.domain,
+        difficulty=request.experience_level,
+        duration=request.duration_minutes,
+        session_type=request.interview_type,
+        mode=request.mode
+    )
+    system_prompt = generate_prompt(config)
     
     try:
-        sonar_response = await sonar_client.search_and_analyze(questions_query)
-        questions_data = await parse_and_save_questions(sonar_response, session_id)
-        
-        # Update session with total questions count
-        await db.update_session(session_id, {"total_questions": len(questions_data)})
+        first_question = await ask_sonar(system_prompt + "\nAsk your first question now.")
+        supabase.table("sessions").insert({
+            "id": session_id,
+            **request.dict(),
+            "created_at": now,
+            "status": "active",
+            "initial_question": first_question,
+            "prompt": system_prompt
+        }).execute()
         
     except Exception as e:
         logger.error(f"Failed to generate questions: {e}")

@@ -111,6 +111,70 @@ def generate_prompt(config: InterviewConfig) -> str:
     difficulty = difficulties.get(config.difficulty, config.difficulty)
     question_types = domain_question_types[config.domain][config.session_type]
 
-    prompt = f"""# Interview Session Configuration\n\n## Role & Context\nYou are an experienced {domain} interviewer conducting a {config.session_type} interview. This is a {config.mode} session designed to evaluate a {difficulty.lower()} candidate.\n\n## Session Parameters\n- **Domain**: {domain}\n- **Difficulty Level**: {difficulty}\n- **Duration**: {config.duration} minutes\n- **Session Type**: {config.session_type.capitalize()}\n- **Mode**: {config.mode.capitalize()}\n\n## Candidate Expectations\nEvaluate candidates based on {difficulty_context[config.difficulty]['expectation']}. Present {difficulty_context[config.difficulty]['complexity']} and assess their {difficulty_context[config.difficulty]['evaluation']}.\n\n## Question Categories to Cover\n{chr(10).join([f'- {qt}' for qt in question_types])}\n\n## Interview Approach\n{session_type_instructions[config.session_type]}\n\n### Mode-Specific Instructions\n- **Pacing**: {mode_instructions[config.mode]['pacing']}\n- **Feedback**: {mode_instructions[config.mode]['feedback']}\n- **Assistance**: {mode_instructions[config.mode]['assistance']}\n- **Atmosphere**: {mode_instructions[config.mode]['atmosphere']}\n\n## Session Structure\n1. **Opening (2-3 minutes)**: Brief introduction and candidate background\n2. **Core Questions ({int(config.duration * 0.7)} minutes)**: {max(1, round(config.duration / 15))} main questions covering the categories above\n3. **Deep Dive ({int(config.duration * 0.2)} minutes)**: Follow-up questions on 1-2 areas\n4. **Closing ({int(config.duration * 0.1)} minutes)**: Candidate questions and next steps\n\n## Evaluation Criteria\n{'- Technical accuracy and depth of knowledge\n- Problem-solving approach and methodology\n- Code quality and best practices (if applicable)\n- Communication of technical concepts\n- Handling of edge cases and trade-offs' if config.session_type == 'technical' else '- Communication and articulation skills\n- Leadership and teamwork examples\n- Problem-solving in interpersonal contexts\n- Cultural fit and values alignment\n- Growth mindset and adaptability'}\n\n## Instructions\n1. Start by greeting the candidate and explaining the session format\n2. Ask questions progressively, building on their responses\n3. {'Provide helpful guidance and create a learning environment' if config.mode == 'practice' else 'Maintain professional interview standards and realistic pressure'}\n4. Take notes on their responses for final evaluation\n5. {'Give immediate feedback after each major question' if config.mode == 'practice' else 'Provide comprehensive feedback at the end'}\n\nBegin the interview when ready. Remember to adapt your questions based on the candidate's responses and maintain the specified difficulty level throughout the session."""
+    technical_criteria = '''- Technical accuracy and depth of knowledge
+- Problem-solving approach and methodology
+- Code quality and best practices (if applicable)
+- Communication of technical concepts
+- Handling of edge cases and trade-offs'''
+
+    hr_criteria = '''- Communication and articulation skills
+- Leadership and teamwork examples
+- Problem-solving in interpersonal contexts
+- Cultural fit and values alignment
+- Growth mindset and adaptability'''
+
+    practice_guidance = 'Provide helpful guidance and create a learning environment'
+    realtime_guidance = 'Maintain professional interview standards and realistic pressure'
+    practice_feedback = 'Give immediate feedback after each major question'
+    realtime_feedback = 'Provide comprehensive feedback at the end'
+
+    evaluation_criteria = technical_criteria if config.session_type == 'technical' else hr_criteria
+    guidance_text = practice_guidance if config.mode == 'practice' else realtime_guidance
+    feedback_text = practice_feedback if config.mode == 'practice' else realtime_feedback
+
+    prompt = f"""# Interview Session Configuration
+
+## Role & Context
+You are an experienced {domain} interviewer conducting a {config.session_type} interview. This is a {config.mode} session designed to evaluate a {difficulty.lower()} candidate.
+
+## Session Parameters
+- **Domain**: {domain}
+- **Difficulty Level**: {difficulty}
+- **Duration**: {config.duration} minutes
+- **Session Type**: {config.session_type.capitalize()}
+- **Mode**: {config.mode.capitalize()}
+
+## Candidate Expectations
+Evaluate candidates based on {difficulty_context[config.difficulty]['expectation']}. Present {difficulty_context[config.difficulty]['complexity']} and assess their {difficulty_context[config.difficulty]['evaluation']}.
+
+## Question Categories to Cover
+{chr(10).join([f'- {qt}' for qt in question_types])}
+
+## Interview Approach
+{session_type_instructions[config.session_type]}
+
+### Mode-Specific Instructions
+- **Pacing**: {mode_instructions[config.mode]['pacing']}
+- **Feedback**: {mode_instructions[config.mode]['feedback']}
+- **Assistance**: {mode_instructions[config.mode]['assistance']}
+- **Atmosphere**: {mode_instructions[config.mode]['atmosphere']}
+
+## Session Structure
+1. **Opening (2-3 minutes)**: Brief introduction and candidate background
+2. **Core Questions ({int(config.duration * 0.7)} minutes)**: {max(1, round(config.duration / 15))} main questions covering the categories above
+3. **Deep Dive ({int(config.duration * 0.2)} minutes)**: Follow-up questions on 1-2 areas
+4. **Closing ({int(config.duration * 0.1)} minutes)**: Candidate questions and next steps
+
+## Evaluation Criteria
+{evaluation_criteria}
+
+## Instructions
+1. Start by greeting the candidate and explaining the session format
+2. Ask questions progressively, building on their responses
+3. {guidance_text}
+4. Take notes on their responses for final evaluation
+5. {feedback_text}
+
+Begin the interview when ready. Remember to adapt your questions based on the candidate's responses and maintain the specified difficulty level throughout the session."""
 
     return prompt

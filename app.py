@@ -23,6 +23,7 @@ import logging
 from dotenv import load_dotenv
 import re, bcrypt
 from prompt_generator import InterviewConfig, generate_prompt
+from collections import Counter
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -384,7 +385,7 @@ async def ask_sonar(prompt: str) -> str:
         "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
         "Content-Type": "application/json"
     }
-    body = {
+    payload = {
         "model": "sonar-small-chat",
         "messages": [
             {"role": "system", "content": "You are a professional AI interviewer."},
@@ -392,10 +393,20 @@ async def ask_sonar(prompt: str) -> str:
         ]
     }
     async with httpx.AsyncClient() as client:
-        response = await client.post("https://api.perplexity.ai/chat/completions", headers=headers, json=body)
+        response = await client.post("https://api.perplexity.ai/chat/completions", headers=headers, json=payload)
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
     
+def extract_weak_areas_from_feedback(answers: List[dict]) -> List[str]:
+    all_issues = []
+    for ans in answers:
+        improvements = ans.get("feedback_improvements", [])
+        for issue in improvements:
+            tokens = [w.strip().lower() for w in re.split(r'[.,;:/()\n]', issue) if len(w.strip()) > 2]
+            all_issues.extend(tokens)
+    counts = Counter(all_issues)
+    common = [word for word, freq in counts.most_common(5)]
+    return common
 
 async def get_current_user(authorization: str = Header(None)) -> dict:
     """Get current user from access token"""
@@ -570,53 +581,50 @@ async def logout(current_user: dict = Depends(get_current_user)):
 @app.post("/api/sessions/start")
 async def start_interview_session(request: SessionRequest, background_tasks: BackgroundTasks):
     """Start a new interview session with Supabase persistence"""
-    session_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
+    session_id = f"session_{datetime.utcnow().timestamp()}"
     config = InterviewConfig(
         domain=request.domain,
-        difficulty=request.experience_level,
-        duration=request.duration_minutes,
-        session_type=request.interview_type,
+        difficulty=request.difficulty,
+        duration=request.duration,
+        session_type=request.session_type,
         mode=request.mode
     )
+
+    # Retrieve previous feedback
+    past = await supabase.table("sessions").select("id").eq("user_id", request.user_id).order("created_at", desc=True).limit(3).execute()
+    user_sessions = past.data if past else []
+    feedback_answers = []
+    for s in user_sessions:
+        a = await supabase.table("session_answers").select("feedback_improvements").eq("session_id", s['id']).execute()
+        feedback_answers.extend(a.data if a else [])
+
+    common_weaknesses = extract_weak_areas_from_feedback(feedback_answers)
+    config.known_weak_areas = common_weaknesses
+
+    # Generate prompt with company focus
     system_prompt = generate_prompt(config)
-    
-    try:
-        first_question = await ask_sonar(system_prompt + "\nAsk your first question now.")
-        supabase.table("sessions").insert({
-            "id": session_id,
-            **request.dict(),
-            "created_at": now,
-            "status": "active",
-            "initial_question": first_question,
-            "prompt": system_prompt
-        }).execute()
-        
-    except Exception as e:
-        logger.error(f"Failed to generate questions: {e}")
-        # Clean up session if question generation fails
-        supabase.table("interview_sessions").delete().eq("id", session_id).execute()
-        raise HTTPException(status_code=500, detail="Failed to generate interview questions")
-    
-    # Start company research in background if company provided
-    if request.company_name:
-        background_tasks.add_task(research_company_context, session_id, request.company_name, request.job_title)
-    
-    # Get first question
-    first_question = questions_data[0] if questions_data else None
-    
-    return {
-        "session_id": session_id,
-        "first_question": {
-            "question_id": 0,
-            "question": first_question.get("question", ""),
-            "difficulty": first_question.get("difficulty", "medium"),
-            "context": first_question.get("context"),
-            "hints": first_question.get("hints", [])
-        } if first_question else None,
-        "total_questions": len(questions_data),
-        "estimated_duration": request.duration_minutes
-    }
+    if request.company:
+        system_prompt += f"\n\n# Company Focus\nTailor questions to be suitable for interviews at {request.company}. Emphasize expectations aligned with their culture and standards."
+
+    personalized_prompt = system_prompt + "\n\nPlease begin the interview with a challenging but fair opening question."
+    first_question = await ask_sonar(personalized_prompt)
+
+    await supabase.table("sessions").insert({
+        "id": session_id,
+        "user_id": request.user_id,
+        "domain": request.domain,
+        "difficulty": request.difficulty,
+        "session_type": request.session_type,
+        "mode": request.mode,
+        "company": request.company,
+        "status": "active",
+        "created_at": datetime.utcnow().isoformat(),
+        "prompt": system_prompt,
+        "initial_question": first_question
+    }).execute()
+
+    return {"session_id": session_id, "question": first_question}
+
 
 @app.get("/api/sessions/{session_id}/question")
 async def get_current_question(session_id: str):
@@ -920,6 +928,26 @@ async def get_transcript(session_id: str):
     except Exception as e:
         logger.error(f"Failed to get transcript: {e}")
         raise HTTPException(status_code=500, detail="Failed to get session transcript")
+
+
+# Weekly improvement digest
+@app.get("/api/users/{user_id}/weekly-report")
+async def weekly_report(user_id: str):
+    one_week_ago = datetime.utcnow() - timedelta(days=7)
+    sessions = await supabase.table("sessions").select("id, created_at").eq("user_id", user_id).gte("created_at", one_week_ago.isoformat()).execute()
+    session_ids = [s['id'] for s in sessions.data]
+    all_feedback = []
+    for sid in session_ids:
+        a = await supabase.table("session_answers").select("feedback_improvements").eq("session_id", sid).execute()
+        all_feedback.extend(a.data)
+
+    weaknesses = extract_weak_areas_from_feedback(all_feedback)
+    return {
+        "user_id": user_id,
+        "sessions_count": len(session_ids),
+        "common_weaknesses": weaknesses,
+        "suggestions": [f"Focus on strengthening '{w}' in upcoming sessions." for w in weaknesses]
+    }
 
 # Background Tasks
 async def research_company_context(session_id: str, company_name: str, job_title: Optional[str]):

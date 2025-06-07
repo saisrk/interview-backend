@@ -103,6 +103,8 @@ class LoginRequest(BaseModel):
     email: str = Field(..., description="User's email address")
     password: str = Field(..., description="User's password")
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 # Load environment variables from .env file
 load_dotenv()
 
@@ -485,10 +487,23 @@ async def signup(req: AuthRequest):
             supabase.auth.admin.delete_user(auth_response.user.id)
             raise HTTPException(status_code=500, detail="Failed to create user profile")
 
+        # Get user preferences
+        preferences = profile_data.get("preferences", {})
+
         return {
             "message": "User registered successfully",
-            "user_id": auth_response.user.id,
-            "email": req.email,
+            "user": {
+                "id": auth_response.user.id,
+                "email": auth_response.user.email,
+                "full_name": req.full_name,
+                "role": req.role or "candidate",
+                "preferences": preferences
+            },
+            "session": {
+                "access_token": auth_response.session.access_token,
+                "refresh_token": auth_response.session.refresh_token,
+                "expires_at": auth_response.session.expires_at
+            },
             "requires_email_confirmation": auth_response.user.confirmed_at is None
         }
 
@@ -551,11 +566,12 @@ async def login(req: LoginRequest):
         logger.error(f"Login error: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error during login")
 
+
 @app.post("/auth/refresh")
-async def refresh_token(refresh_token: str):
+async def refresh_token(payload: RefreshTokenRequest):
     """Refresh access token using refresh token"""
     try:
-        auth_response = supabase.auth.refresh_session(refresh_token)
+        auth_response = supabase.auth.refresh_session(payload.refresh_token)
         
         return {
             "access_token": auth_response.session.access_token,

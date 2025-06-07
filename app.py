@@ -516,13 +516,13 @@ async def login(req: LoginRequest):
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         # Get user profile
-        profile = supabase.table("profiles").select("*").eq("id", auth_response.user.id).execute()
+        profile = supabase.table("auth_users").select("*").eq("id", auth_response.user.id).execute()
         
         if not profile.data:
             raise HTTPException(status_code=404, detail="User profile not found")
 
         # Update last login timestamp
-        supabase.table("profiles").update({
+        supabase.table("auth_users").update({
             "last_login": datetime.utcnow().isoformat()
         }).eq("id", auth_response.user.id).execute()
 

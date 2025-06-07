@@ -30,15 +30,15 @@ def generate_prompt(config: InterviewConfig) -> str:
     }
 
     domain_question_types = {
-        'software-engineering': {
+        'software_engineering': {
             'technical': ['Coding problems', 'System design', 'Data structures & algorithms', 'Architecture patterns', 'Debugging scenarios'],
             'hr': ['Technical leadership', 'Code review processes', 'Team collaboration', 'Project management']
         },
-        'data-science': {
+        'data_science': {
             'technical': ['Statistical analysis', 'Machine learning algorithms', 'Data manipulation', 'Model evaluation', 'A/B testing'],
             'hr': ['Data storytelling', 'Stakeholder communication', 'Project prioritization', 'Cross-functional collaboration']
         },
-        'product-management': {
+        'product_management': {
             'technical': ['Product strategy', 'Feature prioritization', 'Metrics & KPIs', 'User research', 'Roadmap planning'],
             'hr': ['Stakeholder management', 'Cross-team coordination', 'Decision making', 'Conflict resolution']
         },
@@ -88,7 +88,7 @@ def generate_prompt(config: InterviewConfig) -> str:
     }
 
     mode_instructions = {
-        'practice': {
+        'practise': {
             'pacing': 'Allow flexible pacing and provide hints when the candidate is stuck',
             'feedback': 'Provide immediate feedback after each question',
             'assistance': 'Offer guidance and alternative approaches when needed',
@@ -107,9 +107,14 @@ def generate_prompt(config: InterviewConfig) -> str:
         'hr': 'Focus on behavioral scenarios, soft skills, cultural fit, and interpersonal abilities'
     }
 
-    domain = domains.get(config.domain, config.domain)
-    difficulty = difficulties.get(config.difficulty, config.difficulty)
-    question_types = domain_question_types[config.domain][config.session_type]
+    # Convert Enum values to their string representation for dictionary lookup
+    domain_key = config.domain.value if hasattr(config.domain, 'value') else str(config.domain)
+    session_type_key = config.session_type.value if hasattr(config.session_type, 'value') else str(config.session_type)
+    difficulty_key = config.difficulty.value if hasattr(config.difficulty, 'value') else str(config.difficulty)
+
+    domain = domains.get(domain_key, domain_key)
+    difficulty = difficulties.get(difficulty_key, difficulty_key)
+    question_types = domain_question_types[domain_key][session_type_key]
 
     technical_criteria = '''- Technical accuracy and depth of knowledge
 - Problem-solving approach and methodology
@@ -135,29 +140,29 @@ def generate_prompt(config: InterviewConfig) -> str:
     prompt = f"""# Interview Session Configuration
 
 ## Role & Context
-You are an experienced {domain} interviewer conducting a {config.session_type} interview. This is a {config.mode} session designed to evaluate a {difficulty.lower()} candidate.
+You are an experienced {domain} interviewer conducting a {config.session_type.value} interview. This is a {config.mode.value} session designed to evaluate a {difficulty.lower()} candidate.
 
 ## Session Parameters
 - **Domain**: {domain}
 - **Difficulty Level**: {difficulty}
 - **Duration**: {config.duration} minutes
-- **Session Type**: {config.session_type.capitalize()}
-- **Mode**: {config.mode.capitalize()}
+- **Session Type**: {config.session_type.value.capitalize()}
+- **Mode**: {config.mode.value.capitalize()}
 
 ## Candidate Expectations
-Evaluate candidates based on {difficulty_context[config.difficulty]['expectation']}. Present {difficulty_context[config.difficulty]['complexity']} and assess their {difficulty_context[config.difficulty]['evaluation']}.
+Evaluate candidates based on {difficulty_context[config.difficulty.value]['expectation']}. Present {difficulty_context[config.difficulty.value]['complexity']} and assess their {difficulty_context[config.difficulty.value]['evaluation']}.
 
 ## Question Categories to Cover
 {chr(10).join([f'- {qt}' for qt in question_types])}
 
 ## Interview Approach
-{session_type_instructions[config.session_type]}
+{session_type_instructions[config.session_type.value]}
 
 ### Mode-Specific Instructions
-- **Pacing**: {mode_instructions[config.mode]['pacing']}
-- **Feedback**: {mode_instructions[config.mode]['feedback']}
-- **Assistance**: {mode_instructions[config.mode]['assistance']}
-- **Atmosphere**: {mode_instructions[config.mode]['atmosphere']}
+- **Pacing**: {mode_instructions[config.mode.value]['pacing']}
+- **Feedback**: {mode_instructions[config.mode.value]['feedback']}
+- **Assistance**: {mode_instructions[config.mode.value]['assistance']}
+- **Atmosphere**: {mode_instructions[config.mode.value]['atmosphere']}
 
 ## Session Structure
 1. **Opening (2-3 minutes)**: Brief introduction and candidate background

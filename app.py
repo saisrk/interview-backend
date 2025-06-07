@@ -39,8 +39,8 @@ class InterviewDomain(str, Enum):
     CONSULTING = "consulting"
 
 class ExperienceLevel(str, Enum):
-    JUNIOR = "junior"
-    MID_LEVEL = "mid_level"
+    JUNIOR = "entry"
+    MID_LEVEL = "mid"
     SENIOR = "senior"
     LEAD = "lead"
 
@@ -50,12 +50,16 @@ class InterviewType(str, Enum):
     SYSTEM_DESIGN = "system_design"
     CASE_STUDY = "case_study"
 
+class InterviewMode(str, Enum):
+    PRACTISE = "practise"
+    REAL_TIME = "real-time"
 class SessionRequest(BaseModel):
     user_id: Optional[str] = None
     domain: InterviewDomain
     experience_level: ExperienceLevel
     interview_type: InterviewType
     duration_minutes: int = Field(default=30, ge=15, le=120)
+    mode: InterviewMode
     company_name: Optional[str] = None
     job_title: Optional[str] = None
 
@@ -428,7 +432,6 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token")
     
 # API Endpoints
-
 @app.get("/healthcheck")
 async def health_check():
     return {"status": "healthy", "service": "Smart Interview Companion API v2.0", "database": "Supabase"}
@@ -600,18 +603,18 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
     session_id = f"session_{datetime.utcnow().timestamp()}"
     config = InterviewConfig(
         domain=request.domain,
-        difficulty=request.difficulty,
-        duration=request.duration,
-        session_type=request.session_type,
+        difficulty=request.experience_level,
+        duration=request.duration_minutes,
+        session_type=request.interview_type,
         mode=request.mode
     )
 
     # Retrieve previous feedback
-    past = await supabase.table("sessions").select("id").eq("user_id", request.user_id).order("created_at", desc=True).limit(3).execute()
+    past = supabase.table("interview_sessions").select("id").eq("user_id", request.user_id).order("created_at", desc=True).limit(3).execute()
     user_sessions = past.data if past else []
     feedback_answers = []
     for s in user_sessions:
-        a = await supabase.table("session_answers").select("feedback_improvements").eq("session_id", s['id']).execute()
+        a = supabase.table("interview_answers").select("feedback_improvements").eq("session_id", s['id']).execute()
         feedback_answers.extend(a.data if a else [])
 
     common_weaknesses = extract_weak_areas_from_feedback(feedback_answers)
@@ -619,13 +622,13 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
 
     # Generate prompt with company focus
     system_prompt = generate_prompt(config)
-    if request.company:
-        system_prompt += f"\n\n# Company Focus\nTailor questions to be suitable for interviews at {request.company}. Emphasize expectations aligned with their culture and standards."
+    # if request.company:
+    #     system_prompt += f"\n\n# Company Focus\nTailor questions to be suitable for interviews at {request.company}. Emphasize expectations aligned with their culture and standards."
 
     personalized_prompt = system_prompt + "\n\nPlease begin the interview with a challenging but fair opening question."
     first_question = await ask_sonar(personalized_prompt)
 
-    await supabase.table("sessions").insert({
+    supabase.table("interview_sessions").insert({
         "id": session_id,
         "user_id": request.user_id,
         "domain": request.domain,
@@ -636,6 +639,7 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
         "status": "active",
         "created_at": datetime.utcnow().isoformat(),
         "prompt": system_prompt,
+        "current_question_index": 1,
         "initial_question": first_question
     }).execute()
 

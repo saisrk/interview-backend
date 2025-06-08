@@ -392,7 +392,7 @@ async def ask_sonar(prompt: str) -> str:
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "sonar-small-chat",
+        "model": "sonar-medium-chat",
         "messages": [
             {"role": "system", "content": "You are a professional AI interviewer."},
             {"role": "user", "content": prompt}

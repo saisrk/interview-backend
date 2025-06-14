@@ -9,6 +9,7 @@ class InterviewConfig:
     duration: int  # in minutes
     session_type: Literal['technical', 'hr']
     mode: Literal['practice', 'real-time']
+    location: str  # New field for location
 
 def generate_prompt(config: InterviewConfig) -> str:
     domains = {
@@ -27,6 +28,50 @@ def generate_prompt(config: InterviewConfig) -> str:
         'mid': 'Mid Level (2-5 years)',
         'senior': 'Senior Level (5-10 years)',
         'lead': 'Lead/Principal (10+ years)'
+    }
+
+    # Add location-specific context
+    location_context = {
+        'north-america': {
+            'focus': 'Emphasis on practical problem-solving and system design',
+            'communication': 'Clear and direct communication style',
+            'cultural': 'Focus on individual contributions and innovation'
+        },
+        'europe': {
+            'focus': 'Strong emphasis on theoretical knowledge and best practices',
+            'communication': 'Structured and methodical communication',
+            'cultural': 'Balance of individual and team contributions'
+        },
+        'asia-pacific': {
+            'focus': 'Technical depth and attention to detail',
+            'communication': 'Respectful and hierarchical communication style',
+            'cultural': 'Strong emphasis on team harmony and collaboration'
+        },
+        'india': {
+            'focus': 'Strong theoretical foundation and problem-solving',
+            'communication': 'Clear technical communication with cultural context',
+            'cultural': 'Balance of individual excellence and team collaboration'
+        }
+    }
+
+    # Add location-specific question types
+    location_question_types = {
+        'north-america': {
+            'technical': ['System design', 'Scalability', 'Cloud architecture', 'Agile practices'],
+            'hr': ['Leadership style', 'Conflict resolution', 'Innovation mindset']
+        },
+        'europe': {
+            'technical': ['Software architecture', 'Design patterns', 'Testing methodologies', 'Security practices'],
+            'hr': ['Team collaboration', 'Process improvement', 'Quality focus']
+        },
+        'asia-pacific': {
+            'technical': ['Technical depth', 'Implementation details', 'Performance optimization'],
+            'hr': ['Team dynamics', 'Cultural awareness', 'Process adherence']
+        },
+        'india': {
+            'technical': ['Algorithm complexity', 'System design', 'Implementation details'],
+            'hr': ['Team leadership', 'Cross-functional collaboration', 'Process improvement']
+        }
     }
 
     domain_question_types = {
@@ -116,6 +161,11 @@ def generate_prompt(config: InterviewConfig) -> str:
     difficulty = difficulties.get(difficulty_key, difficulty_key)
     question_types = domain_question_types[domain_key][session_type_key]
 
+    # Get location-specific context
+    location_key = config.location.lower().replace(' ', '-')
+    location_info = location_context.get(location_key, location_context['north-america'])
+    location_questions = location_question_types.get(location_key, location_question_types['north-america'])
+
     technical_criteria = '''- Technical accuracy and depth of knowledge
 - Problem-solving approach and methodology
 - Code quality and best practices (if applicable)
@@ -140,7 +190,7 @@ def generate_prompt(config: InterviewConfig) -> str:
     prompt = f"""# Interview Session Configuration
 
 ## Role & Context
-You are an experienced {domain} interviewer conducting a {config.session_type.value} interview. This is a {config.mode.value} session designed to evaluate a {difficulty.lower()} candidate.
+You are an experienced {domain} interviewer conducting a {config.session_type.value} interview. This is a {config.mode.value} session designed to evaluate a {difficulty.lower()} candidate in the {config.location} region.
 
 ## Session Parameters
 - **Domain**: {domain}
@@ -148,12 +198,21 @@ You are an experienced {domain} interviewer conducting a {config.session_type.va
 - **Duration**: {config.duration} minutes
 - **Session Type**: {config.session_type.value.capitalize()}
 - **Mode**: {config.mode.value.capitalize()}
+- **Location**: {config.location}
+
+## Regional Context
+- **Focus**: {location_info['focus']}
+- **Communication Style**: {location_info['communication']}
+- **Cultural Considerations**: {location_info['cultural']}
 
 ## Candidate Expectations
 Evaluate candidates based on {difficulty_context[config.difficulty.value]['expectation']}. Present {difficulty_context[config.difficulty.value]['complexity']} and assess their {difficulty_context[config.difficulty.value]['evaluation']}.
 
 ## Question Categories to Cover
 {chr(10).join([f'- {qt}' for qt in question_types])}
+
+## Location-Specific Focus Areas
+{chr(10).join([f'- {qt}' for qt in location_questions[config.session_type.value]])}
 
 ## Interview Approach
 {session_type_instructions[config.session_type.value]}
@@ -179,6 +238,7 @@ Evaluate candidates based on {difficulty_context[config.difficulty.value]['expec
 3. {guidance_text}
 4. Take notes on their responses for final evaluation
 5. {feedback_text}
+6. When starting an interview, always provide an introduction followed by the first question. Format your response as follows:\n\n---\n[INTRODUCTION]\nYour intro text here.\n\n[QUESTION]\nYour first interview question here.\n---
 
 Begin the interview when ready. Remember to adapt your questions based on the candidate's responses and maintain the specified difficulty level throughout the session."""
 

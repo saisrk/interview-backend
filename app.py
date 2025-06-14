@@ -9,21 +9,16 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from enum import Enum
 import httpx
-import asyncio
-import json
-import uuid
 from datetime import datetime, timedelta
 import os
 from contextlib import asynccontextmanager
 from supabase import create_client, Client
-import asyncpg
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
 import logging
 from dotenv import load_dotenv
 import re, bcrypt
 from prompt_generator import InterviewConfig, generate_prompt
 from collections import Counter
+from openai import OpenAI
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -62,6 +57,7 @@ class SessionRequest(BaseModel):
     mode: InterviewMode
     company_name: Optional[str] = None
     job_title: Optional[str] = None
+    location: Optional[str] = None
 
 class AnswerRequest(BaseModel):
     session_id: str
@@ -386,22 +382,24 @@ async def initialize_database():
 
 
 # ---------------------- Sonar Integration ----------------------
-async def ask_sonar(prompt: str) -> str:
-    headers = {
-        "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "sonar-medium-chat",
-        "messages": [
-            {"role": "system", "content": "You are a professional AI interviewer."},
-            {"role": "user", "content": prompt}
-        ]
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.post("https://api.perplexity.ai/chat/completions", headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+async def ask_sonar(system_prompt: str, user_prompt: str) -> str:
+    messages = [
+        {
+            "role": "system", 
+            "content": system_prompt
+        },
+        {
+            "role": "user", 
+            "content": user_prompt
+        }
+    ]
+    client = OpenAI(api_key=PERPLEXITY_API_KEY, base_url="https://api.perplexity.ai")
+    response = client.chat.completions.create(
+        model="sonar-pro",
+        messages=messages,
+    )
+    print(response)
+    return response
     
 def extract_weak_areas_from_feedback(answers: List[dict]) -> List[str]:
     all_issues = []
@@ -597,16 +595,64 @@ async def logout(current_user: dict = Depends(get_current_user)):
 
 # ------------------------- 🎯 Core Interview APIs ----------------------------
 
+def parse_first_question(sonar_response: Dict) -> Dict:
+    """Parse the first question response from Sonar Pro into introduction and main question"""
+    content = sonar_response.choices[0].message.content
+    citations = sonar_response.citations
+
+    # The prompt is multi-line. Parse from Introduction till Question, then after everything is question.
+    introduction = ""
+    main_question = ""
+    in_intro = False
+    in_question = False
+    intro_lines = []
+    question_lines = []
+
+    for line in content.splitlines():
+        if '[INTRODUCTION]' in line:
+            in_intro = True
+            in_question = False
+            # If there's text after the marker, add it
+            after = line.split('[INTRODUCTION]', 1)[1].strip()
+            if after:
+                intro_lines.append(after)
+            continue
+        if '[QUESTION]' in line:
+            in_intro = False
+            in_question = True
+            # If there's text after the marker, add it
+            after = line.split('[QUESTION]', 1)[1].strip()
+            if after:
+                question_lines.append(after)
+            continue
+        if in_intro:
+            intro_lines.append(line)
+        elif in_question:
+            question_lines.append(line)
+
+    introduction = "\n".join(intro_lines).strip()
+    main_question = "\n".join(question_lines).strip()
+
+    # Clean up the question text
+    question_text = re.sub(r'^#+\s*', '', main_question)
+    question_text = re.sub(r'^[Qq]uestion:\s*', '', question_text)
+
+    return {
+        "introduction": introduction,
+        "main_question": question_text.strip(),
+        "citations": citations[:3] if citations else []
+    }
+
 @app.post("/api/sessions/start")
 async def start_interview_session(request: SessionRequest, background_tasks: BackgroundTasks):
     """Start a new interview session with Supabase persistence"""
-    session_id = f"session_{datetime.utcnow().timestamp()}"
     config = InterviewConfig(
         domain=request.domain,
         difficulty=request.experience_level,
         duration=request.duration_minutes,
         session_type=request.interview_type,
-        mode=request.mode
+        mode=request.mode,
+        location=request.location
     )
 
     # Retrieve previous feedback
@@ -622,28 +668,49 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
 
     # Generate prompt with company focus
     system_prompt = generate_prompt(config)
-    # if request.company:
-    #     system_prompt += f"\n\n# Company Focus\nTailor questions to be suitable for interviews at {request.company}. Emphasize expectations aligned with their culture and standards."
 
-    personalized_prompt = system_prompt + "\n\nPlease begin the interview with a challenging but fair opening question."
-    first_question = await ask_sonar(personalized_prompt)
+    personalized_prompt = "Please begin the interview with a challenging but fair opening question."
+    sonar_response = await ask_sonar(system_prompt, personalized_prompt)
+    
+    # Parse the first question response
+    first_question_data = parse_first_question(sonar_response)
 
-    supabase.table("interview_sessions").insert({
-        "id": session_id,
+    # Save session data
+    session_data = {
         "user_id": request.user_id,
         "domain": request.domain,
-        "difficulty": request.difficulty,
-        "session_type": request.session_type,
+        "experience_level": request.experience_level,
+        "interview_type": request.interview_type,
         "mode": request.mode,
-        "company": request.company,
+        "company_name": request.company_name or None,
+        "job_title": request.job_title or None,
+        "duration_minutes": request.duration_minutes,
         "status": "active",
         "created_at": datetime.utcnow().isoformat(),
-        "prompt": system_prompt,
         "current_question_index": 1,
-        "initial_question": first_question
-    }).execute()
+        "total_questions": 1,
+    }
+    
+    interview_session = supabase.table("interview_sessions").insert(session_data).execute()
 
-    return {"session_id": session_id, "question": first_question}
+    # Save the first question in the interview_questions table
+    question_data = {
+        "session_id": interview_session.data[0]['id'],
+        "question_order": 1,
+        "question": first_question_data["main_question"],
+        "difficulty": request.experience_level,
+        "hints": [],  # No hints for the first question by default
+        "citations": first_question_data.get("citations", []),
+        "context": None,
+    }
+    supabase.table("interview_questions").insert(question_data).execute()
+
+    return {
+        "session_id": interview_session.data[0]['id'],
+        "introduction": first_question_data["introduction"],
+        "question": first_question_data["main_question"],
+        "citations": first_question_data["citations"]
+    }
 
 
 @app.get("/api/sessions/{session_id}/question")

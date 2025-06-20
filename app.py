@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 import re, bcrypt
 from prompt_generator import InterviewConfig, generate_prompt
 from collections import Counter
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI, OpenAIError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -241,45 +241,44 @@ class SonarProClient:
         
     async def search_and_analyze(self, query: str, model: str = "llama-3.1-sonar-large-128k-online", return_citations: bool = True) -> Dict:
         """Enhanced Sonar Pro search with real-time web data"""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are an expert interview coach with access to real-time industry data. Provide detailed, current, and actionable insights with proper citations."
+        try:
+            # Use OpenAI's async client for Perplexity endpoint
+            client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url
+            )
+
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert interview coach with access to real-time industry data. Provide detailed, current, and actionable insights with proper citations."
+                    },
+                    {
+                        "role": "user",
+                        "content": query
+                    }
+                ],
+                max_tokens=2000,
+                temperature=0.7,
+                extra_body={
+                    "return_citations": return_citations,
+                    "search_domain_filter": [
+                        "linkedin.com", "glassdoor.com", "stackoverflow.com",
+                        "github.com", "medium.com", "dev.to"
+                    ]
                 },
-                {
-                    "role": "user", 
-                    "content": query
-                }
-            ],
-            "max_tokens": 2000,
-            "temperature": 0.7,
-            "return_citations": return_citations,
-            "search_domain_filter": ["linkedin.com", "glassdoor.com", "stackoverflow.com", "github.com", "medium.com", "dev.to"]
-        }
-        
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=headers,
-                    json=payload
-                )
-                
-                if response.status_code != 200:
-                    logger.error(f"Sonar API error: {response.status_code} - {response.text}")
-                    raise HTTPException(status_code=500, detail=f"Sonar API error: {response.text}")
-                    
-                return response.json()
-            except httpx.TimeoutException:
-                logger.error("Sonar API timeout")
-                raise HTTPException(status_code=504, detail="AI service timeout")
+                timeout=45.0
+            )
+            # OpenAI's response is an object, convert to dict for compatibility
+            return response.model_dump() if hasattr(response, "model_dump") else response
+        except OpenAIError as e:
+            logger.error(f"Sonar API error: {e}")
+            raise HTTPException(status_code=500, detail=f"Sonar API error: {e}")
+        except Exception as e:
+            logger.error(f"Sonar API unexpected error: {e}")
+            raise HTTPException(status_code=500, detail="AI service error")
 
 sonar_client = SonarProClient()
 
@@ -688,7 +687,7 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
         "status": "active",
         "created_at": datetime.utcnow().isoformat(),
         "current_question_index": 1,
-        "total_questions": 1,
+        "total_questions": 5,
     }
     
     interview_session = supabase.table("interview_sessions").insert(session_data).execute()
@@ -711,7 +710,6 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
         "question": first_question_data["main_question"],
         "citations": first_question_data["citations"]
     }
-
 
 @app.get("/api/sessions/{session_id}/question")
 async def get_current_question(session_id: str):
@@ -795,6 +793,57 @@ async def submit_answer(session_id: str, answer_request: AnswerRequest):
     except Exception as e:
         logger.error(f"Failed to generate feedback: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate feedback")
+
+@app.get("/api/sessions/{session_id}/next")
+async def get_next_question(session_id: str):
+    """
+    Get the next question in the interview session.
+    The model should be aware of the existing session and previous answers to maintain context.
+    """
+    # Fetch session details
+    session = await db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Get all questions and answers for this session
+    questions = await db.get_session_questions(session_id)
+    answers = await db.get_session_answers(session_id)
+
+    # Determine the next question index
+    current_index = session.get("current_question_index", 0)
+    total_questions = len(questions)
+
+    if current_index >= total_questions:
+        return {
+            "message": "Interview session completed",
+            "next_question": None,
+            "completed": True
+        }
+
+    # Get the next question
+    next_question = questions[current_index]
+
+    # Optionally, you can include previous answers for model context
+    previous_answers = [
+        {
+            "question": q["question"],
+            "answer": a["user_answer"]
+        }
+        for q, a in zip(questions[:current_index], answers[:current_index])
+        if a.get("user_answer")
+    ]
+
+    return {
+        "session_id": session_id,
+        "question_order": next_question["question_order"],
+        "question_id": next_question["id"],
+        "question": next_question["question"],
+        "difficulty": next_question.get("difficulty"),
+        "context": next_question.get("context"),
+        "hints": next_question.get("hints", []),
+        "previous_answers": previous_answers,
+        "completed": False
+    }
 
 @app.get("/api/sessions/{session_id}/transcript")
 async def get_session_transcript(session_id: str):

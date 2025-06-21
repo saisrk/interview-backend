@@ -418,6 +418,7 @@ async def ask_sonar(system_prompt: str, user_prompt: str) -> str:
     print(response)
     return response
     
+
 def extract_weak_areas_from_feedback(answers: List[dict]) -> List[str]:
     all_issues = []
     for ans in answers:
@@ -428,6 +429,7 @@ def extract_weak_areas_from_feedback(answers: List[dict]) -> List[str]:
     counts = Counter(all_issues)
     common = [word for word, freq in counts.most_common(5)]
     return common
+
 
 async def get_current_user(authorization: str = Header(None)) -> dict:
     """Get current user from access token"""
@@ -996,6 +998,61 @@ async def get_sessions_by_user(user_id: str):
             completed_sessions.append(summary)
             
     return {"incomplete_session": incomplete_session, "completed_sessions": completed_sessions}
+
+@app.get("/api/sessions/{session_id}")
+async def get_session_details(session_id: str):
+    """Get interview session details with questions and answers."""
+    session = await db.get_session(session_id)
+    questions = await db.get_session_questions(session_id)
+    answers = await db.get_session_answers(session_id)
+
+    answers_by_q_order = {ans["question_order"]: ans for ans in answers}
+
+    question_answers_list = []
+    for q in questions:
+        answer_data = answers_by_q_order.get(q["question_order"])
+        
+        answer_obj = None
+        if answer_data:
+            answer_obj = {
+                "answer_id": answer_data["id"],
+                "user_answer": answer_data["user_answer"],
+                "response_time_seconds": answer_data["response_time_seconds"],
+                "feedback_score": answer_data["feedback_score"],
+                "feedback_strengths": answer_data["feedback_strengths"],
+                "feedback_improvements": answer_data["feedback_improvements"],
+                "industry_insights": answer_data["industry_insights"],
+                "citations": answer_data.get("citations", []),
+                "created_at": answer_data["created_at"]
+            }
+
+        question_obj = {
+            "question_id": q["id"],
+            "question_order": q["question_order"],
+            "question": q["question"],
+            "difficulty": q.get("difficulty"),
+            "hints": q.get("hints", []),
+            "citations": q.get("citations", []),
+            "answer": answer_obj
+        }
+        
+        question_answers_list.append({"question": question_obj})
+
+    return {
+        "session_id": session["id"],
+        "user_id": session["user_id"],
+        "experience_level": session["experience_level"],
+        "interview_type": session["interview_type"],
+        "mode": session["mode"],
+        "company_name": session.get("company_name"),
+        "job_title": session.get("job_title"),
+        "duration_minutes": session["duration_minutes"],
+        "status": session["status"],
+        "created_at": session["created_at"],
+        "current_question_index": session["current_question_index"],
+        "total_questions": len(questions),
+        "question_answers": question_answers_list
+    }
 
 @app.get("/api/users/{user_id}/sessions")
 async def get_user_sessions(user_id: str, limit: int = 10):

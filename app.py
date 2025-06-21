@@ -48,6 +48,11 @@ class InterviewType(str, Enum):
 class InterviewMode(str, Enum):
     PRACTISE = "practise"
     REAL_TIME = "real-time"
+
+class PromptType(str, Enum):
+    INTIAL_QUESTION = "initial_question"
+    NEXT_QUESTION = "next_question"
+    FEEDBACK = "feedback"
 class SessionRequest(BaseModel):
     user_id: Optional[str] = None
     domain: InterviewDomain
@@ -61,7 +66,7 @@ class SessionRequest(BaseModel):
 
 class AnswerRequest(BaseModel):
     session_id: str
-    question_id: int
+    question_id: str
     answer: str
     response_time_seconds: int
 
@@ -666,7 +671,7 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
     config.known_weak_areas = common_weaknesses
 
     # Generate prompt with company focus
-    system_prompt = generate_prompt(config)
+    system_prompt = generate_prompt(config, PromptType.INTIAL_QUESTION.value)
 
     personalized_prompt = "Please begin the interview with a challenging but fair opening question."
     sonar_response = await ask_sonar(system_prompt, personalized_prompt)
@@ -739,10 +744,10 @@ async def submit_answer(session_id: str, answer_request: AnswerRequest):
     session = await db.get_session(session_id)
     questions = await db.get_session_questions(session_id)
     
-    if answer_request.question_id >= len(questions):
+    # Find the question with the matching UUID
+    current_question = next((q for q in questions if str(q["id"]) == str(answer_request.question_id)), None)
+    if not current_question:
         raise HTTPException(status_code=400, detail="Invalid question ID")
-    
-    current_question = questions[answer_request.question_id]
     
     # Generate comprehensive feedback using Sonar Pro
     feedback_query = f"""
@@ -757,6 +762,11 @@ async def submit_answer(session_id: str, answer_request: AnswerRequest):
     3. 3 concrete areas for improvement
     4. Current industry insights and best practices (2024-2025)
     5. A natural, relevant follow-up question
+    6. Format your response as follows.
+    [SCORE]
+    [STRENGTHS]
+    [IMPROVEMENT]
+    [FOLLOW UP]
     
     Use real-time industry data, current hiring trends, and best practices.
     Be constructive and actionable in your feedback.
@@ -764,7 +774,7 @@ async def submit_answer(session_id: str, answer_request: AnswerRequest):
     
     try:
         sonar_response = await sonar_client.search_and_analyze(feedback_query)
-        feedback = parse_feedback_from_response(sonar_response)
+        feedback = parse_feedback_response(sonar_response)
         
         # Save answer and feedback to database
         answer_data = {
@@ -1184,54 +1194,100 @@ def extract_difficulty(question_text: str) -> str:
     else:
         return 'medium'
 
-def parse_feedback_from_response(sonar_response: Dict) -> FeedbackResponse:
-    """Parse feedback from Sonar Pro response"""
+def parse_feedback_response(sonar_response: Dict) -> FeedbackResponse:
+    """Parse feedback from Sonar Pro response into structured FeedbackResponse"""
     content = sonar_response.get("choices", [{}])[0].get("message", {}).get("content", "")
     citations = sonar_response.get("citations", [])
     
-    # Extract structured feedback (implement proper parsing based on response format)
-    lines = content.split('\n')
-    
-    score = 7.0  # Default score
+    # Initialize default values
+    score = 7.0
     strengths = []
     improvements = []
-    insights = []
-    follow_up = None
+    industry_insights = []
+    follow_up_question = None
     
+    # Split content into lines and parse by sections
+    lines = content.split('\n')
     current_section = None
+    current_content = []
+    
     for line in lines:
         line = line.strip()
-        if 'score' in line.lower() and any(char.isdigit() for char in line):
-            # Extract score
-            import re
-            score_match = re.search(r'(\d+(?:\.\d+)?)', line)
-            if score_match:
-                score = float(score_match.group(1))
-                if score > 10:
-                    score = score / 10  # Normalize if out of 10
+        if not line:
+            continue
         
-        elif 'strength' in line.lower():
-            current_section = 'strengths'
-        elif 'improvement' in line.lower() or 'area' in line.lower():
-            current_section = 'improvements' 
-        elif 'insight' in line.lower() or 'industry' in line.lower():
-            current_section = 'insights'
-        elif 'follow' in line.lower():
-            follow_up = line
-        elif current_section:
-            if current_section == 'strengths':
-                strengths.append(line)
-            elif current_section == 'improvements':
-                improvements.append(line)
-            elif current_section == 'insights':
-                insights.append(line)
+        # Check for section headers
+        if line.startswith('##'):
+            # Process previous section content
+            if current_section and current_content:
+                if current_section == 'strengths':
+                    strengths = [item.strip() for item in current_content if item.strip() and len(item.strip()) > 10]
+                elif current_section == 'improvements':
+                    improvements = [item.strip() for item in current_content if item.strip() and len(item.strip()) > 10]
+                elif current_section == 'industry_insights':
+                    industry_insights = [item.strip() for item in current_content if item.strip() and len(item.strip()) > 10]
+                elif current_section == 'follow_up':
+                    follow_up_question = ' '.join(current_content).strip()
+            
+            # Start new section
+            current_content = []
+            
+            # Determine section type
+            if 'Score:' in line:
+                # Extract score
+                score_match = re.search(r'Score:\s*(\d+(?:\.\d+)?)', line)
+                if score_match:
+                    score = float(score_match.group(1))
+                    if score > 10:
+                        score = score / 10
+            elif 'Strengths' in line:
+                current_section = 'strengths'
+            elif 'Improvement' in line:
+                current_section = 'improvements'
+            elif 'Current Industry Insights' in line or 'Industry Insights' in line:
+                current_section = 'industry_insights'
+            elif 'Follow-Up Question' in line:
+                current_section = 'follow_up'
+            else:
+                current_section = None
+        
+        # Add content to current section
+        elif current_section and line:
+            # Skip sub-headers (###)
+            if not line.startswith('###'):
+                # Remove bullet points and numbering
+                clean_line = re.sub(r'^\d+\.\s*', '', line)
+                clean_line = re.sub(r'^\*\s*', '', clean_line)
+                clean_line = re.sub(r'^-\s*', '', clean_line)
+                clean_line = re.sub(r'^\*\*\s*', '', clean_line)
+                clean_line = re.sub(r'^\*\*\*\s*', '', clean_line)
+                
+                if clean_line and len(clean_line) > 5:  # Filter out very short lines
+                    current_content.append(clean_line)
+    
+    # Process the last section
+    if current_section and current_content:
+        if current_section == 'strengths':
+            strengths = [item.strip() for item in current_content if item.strip() and len(item.strip()) > 10]
+        elif current_section == 'improvements':
+            improvements = [item.strip() for item in current_content if item.strip() and len(item.strip()) > 10]
+        elif current_section == 'industry_insights':
+            industry_insights = [item.strip() for item in current_content if item.strip() and len(item.strip()) > 10]
+        elif current_section == 'follow_up':
+            follow_up_question = ' '.join(current_content).strip()
+    
+    # Clean up and limit the number of items
+    strengths = strengths[:3]  # Limit to 3 strengths
+    improvements = improvements[:3]  # Limit to 3 improvements
+    industry_insights = industry_insights[:3]  # Limit to 3 insights
     
     return FeedbackResponse(
         score=score,
         strengths=strengths,
         improvements=improvements,
-        industry_insights=insights,
-        follow_up_question=follow_up
+        industry_insights=industry_insights,
+        follow_up_question=follow_up_question,
+        citations=citations[:3] if citations else []
     )
 
 def parse_trends_from_response(sonar_response: Dict) -> Dict:

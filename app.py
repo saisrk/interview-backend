@@ -691,7 +691,7 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
         "duration_minutes": request.duration_minutes,
         "status": "active",
         "created_at": datetime.utcnow().isoformat(),
-        "current_question_index": 1,
+        "current_question_index": 0,
         "total_questions": 5,
     }
     
@@ -828,6 +828,7 @@ async def submit_answer(session_id: str, answer_request: AnswerRequest):
                 "citations": []
             }
             await db.save_question(question_data)
+            answer_data["status"] = "active"
         else:
             # End of interview if no follow-up or max questions reached
             await db.update_session(session_id, {"status": "completed"})

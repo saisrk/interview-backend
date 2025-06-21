@@ -11,6 +11,13 @@ class InterviewConfig:
     mode: Literal['practice', 'real-time']
     location: str  # New field for location
 
+@dataclass
+class AnswerConfig:
+    session_id: str
+    question_id: str
+    answer: str
+    response_time_seconds: int
+
 # Global variables for common data
 DOMAINS = {
     'software-engineering': 'Software Engineering',
@@ -301,7 +308,7 @@ Generate the next interview question now."""
     return prompt
 
 
-def generate_prompt(config: InterviewConfig, type: str, previous_question: str = None, candidate_response: str = None) -> str:
+def generate_prompt(config: InterviewConfig | AnswerConfig, type: str, previous_question: str = None, candidate_response: str = None) -> str:
     if type == 'initial_question':
         return generate_initial_prompt(config)
     elif type == 'next_question':

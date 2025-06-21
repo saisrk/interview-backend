@@ -749,28 +749,48 @@ async def submit_answer(session_id: str, answer_request: AnswerRequest):
     if not current_question:
         raise HTTPException(status_code=400, detail="Invalid question ID")
     
-    # Generate comprehensive feedback using Sonar Pro
-    feedback_query = f"""
-    As an expert interview coach, analyze this {session['domain']} interview answer for a {session['experience_level']} role:
+    # Determine max questions based on session duration
+    duration = session.get("duration_minutes", 30)
+    if duration <= 20: # short
+        max_questions = 3
+    elif duration <= 45: # medium
+        max_questions = 5
+    else: # long
+        max_questions = 10
+        
+    # Check if max questions limit reached
+    current_index = session.get("current_question_index", 0)
     
-    Question: {current_question['question']}
-    Candidate Answer: {answer_request.answer}
+    # Generate comprehensive feedback using Sonar Pro
+    feedback_prompt_template = """
+    As an expert interview coach, analyze this {domain} interview answer for a {experience_level} role:
+    
+    Question: {question}
+    Candidate Answer: {answer}
     
     Provide structured feedback with:
     1. Score (1-10) with justification
     2. 3 specific strengths demonstrated
     3. 3 concrete areas for improvement
     4. Current industry insights and best practices (2024-2025)
-    5. A natural, relevant follow-up question
-    6. Format your response as follows.
-    [SCORE]
-    [STRENGTHS]
-    [IMPROVEMENT]
-    [FOLLOW UP]
+    {follow_up_section}
     
     Use real-time industry data, current hiring trends, and best practices.
     Be constructive and actionable in your feedback.
     """
+    
+    if current_index >= max_questions -1:
+        follow_up_section = ""
+    else:
+        follow_up_section = "5. A natural, relevant follow-up question"
+        
+    feedback_query = feedback_prompt_template.format(
+        domain=session['domain'],
+        experience_level=session['experience_level'],
+        question=current_question['question'],
+        answer=answer_request.answer,
+        follow_up_section=follow_up_section
+    )
     
     try:
         sonar_response = await sonar_client.search_and_analyze(feedback_query)
@@ -780,7 +800,7 @@ async def submit_answer(session_id: str, answer_request: AnswerRequest):
         answer_data = {
             "session_id": session_id,
             "question_id": current_question["id"],
-            "question_order": answer_request.question_id,
+            "question_order": current_question["question_order"],
             "user_answer": answer_request.answer,
             "response_time_seconds": answer_request.response_time_seconds,
             "feedback_score": feedback.score,
@@ -794,6 +814,23 @@ async def submit_answer(session_id: str, answer_request: AnswerRequest):
         
         await db.save_answer(answer_data)
         
+        # If there's a follow-up, save it as the next question
+        if feedback.follow_up_question and current_index < max_questions - 1:
+            new_question_order = current_question["question_order"] + 1
+            question_data = {
+                "session_id": session_id,
+                "question_order": new_question_order,
+                "question": feedback.follow_up_question,
+                "difficulty": "medium",  # Default difficulty
+                "context": f"Follow-up to: {current_question['question']}",
+                "hints": [],
+                "citations": []
+            }
+            await db.save_question(question_data)
+        else:
+            # End of interview if no follow-up or max questions reached
+            await db.update_session(session_id, {"status": "completed"})
+            
         # Move to next question
         new_index = session.get("current_question_index", 0) + 1
         await db.update_session(session_id, {"current_question_index": new_index})
@@ -1211,13 +1248,20 @@ def parse_feedback_response(sonar_response: Dict) -> FeedbackResponse:
     current_section = None
     current_content = []
     
-    for line in lines:
-        line = line.strip()
+    # Define main headers to look for
+    main_headers = ['Score:', 'Strengths', 'Improvement', 'Current Industry Insights', 'Industry Insights', 'Follow-Up Question']
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
         if not line:
+            i += 1
             continue
         
-        # Check for section headers
-        if line.startswith('##'):
+        # Check if this line contains any of the main headers
+        is_header_line = any(header in line for header in main_headers)
+        
+        if is_header_line:
             # Process previous section content
             if current_section and current_content:
                 if current_section == 'strengths':
@@ -1250,20 +1294,52 @@ def parse_feedback_response(sonar_response: Dict) -> FeedbackResponse:
                 current_section = 'follow_up'
             else:
                 current_section = None
-        
-        # Add content to current section
-        elif current_section and line:
-            # Skip sub-headers (###)
-            if not line.startswith('###'):
-                # Remove bullet points and numbering
-                clean_line = re.sub(r'^\d+\.\s*', '', line)
-                clean_line = re.sub(r'^\*\s*', '', clean_line)
-                clean_line = re.sub(r'^-\s*', '', clean_line)
-                clean_line = re.sub(r'^\*\*\s*', '', clean_line)
-                clean_line = re.sub(r'^\*\*\*\s*', '', clean_line)
+            
+            # Iterate through lines until next header is found
+            j = i + 1
+            while j < len(lines):
+                next_line = lines[j].strip()
+                if not next_line:
+                    j += 1
+                    continue
                 
-                if clean_line and len(clean_line) > 5:  # Filter out very short lines
-                    current_content.append(clean_line)
+                # Check if next line is a header
+                if any(header in next_line for header in main_headers):
+                    break
+                
+                # Add content to current section
+                if current_section and next_line:
+                    # Skip sub-headers (###)
+                    if not next_line.startswith('###'):
+                        # Remove bullet points and numbering
+                        clean_line = re.sub(r'^\d+\.\s*', '', next_line)
+                        clean_line = re.sub(r'^\*\s*', '', clean_line)
+                        clean_line = re.sub(r'^-\s*', '', clean_line)
+                        clean_line = re.sub(r'^\*\*\s*', '', clean_line)
+                        clean_line = re.sub(r'^\*\*\*\s*', '', clean_line)
+                        
+                        if clean_line and len(clean_line) > 5:  # Filter out very short lines
+                            current_content.append(clean_line)
+                
+                j += 1
+            
+            # Skip the lines we've already processed
+            i = j
+        else:
+            # Add content to current section for non-header lines
+            if current_section and line:
+                # Skip sub-headers (###)
+                if not line.startswith('###'):
+                    # Remove bullet points and numbering
+                    clean_line = re.sub(r'^\d+\.\s*', '', line)
+                    clean_line = re.sub(r'^\*\s*', '', clean_line)
+                    clean_line = re.sub(r'^-\s*', '', clean_line)
+                    clean_line = re.sub(r'^\*\*\s*', '', clean_line)
+                    clean_line = re.sub(r'^\*\*\*\s*', '', clean_line)
+                    
+                    if clean_line and len(clean_line) > 5:  # Filter out very short lines
+                        current_content.append(clean_line)
+            i += 1
     
     # Process the last section
     if current_section and current_content:

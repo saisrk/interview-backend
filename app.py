@@ -831,12 +831,13 @@ async def submit_answer(session_id: str, answer_request: AnswerRequest):
         else:
             # End of interview if no follow-up or max questions reached
             await db.update_session(session_id, {"status": "completed"})
+            answer_data["status"] = "completed"
             
         # Move to next question
         new_index = session.get("current_question_index", 0) + 1
         await db.update_session(session_id, {"current_question_index": new_index})
         
-        return feedback
+        return answer_data
         
     except Exception as e:
         logger.error(f"Failed to generate feedback: {e}")

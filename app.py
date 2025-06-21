@@ -707,10 +707,11 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
         "citations": first_question_data.get("citations", []),
         "context": None,
     }
-    supabase.table("interview_questions").insert(question_data).execute()
+    interview_question = supabase.table("interview_questions").insert(question_data).execute()
 
     return {
         "session_id": interview_session.data[0]['id'],
+        "question_id": interview_question.data[0]['id'],
         "introduction": first_question_data["introduction"],
         "question": first_question_data["main_question"],
         "citations": first_question_data["citations"]
@@ -1249,7 +1250,7 @@ def parse_feedback_response(sonar_response: Dict) -> FeedbackResponse:
     current_content = []
     
     # Define main headers to look for
-    main_headers = ['Score:', 'Strengths', 'Improvement', 'Current Industry Insights', 'Industry Insights', 'Follow-Up Question']
+    main_headers = ['Score', 'Strengths', 'Areas for Improvement', 'Current Industry Insights', 'Industry Insights', 'Follow-Up Question']
     
     i = 0
     while i < len(lines):

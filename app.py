@@ -227,6 +227,19 @@ class DatabaseManager:
             logger.error(f"Error getting user sessions: {e}")
             return []
 
+    async def get_all_user_sessions(self, user_id: str) -> List[dict]:
+        """Get all of a user's sessions"""
+        try:
+            result = (self.supabase.table("interview_sessions")
+                     .select("*")
+                     .eq("user_id", user_id)
+                     .order("created_at", desc=True)
+                     .execute())
+            return result.data
+        except Exception as e:
+            logger.error(f"Error getting all user sessions: {e}")
+            return []
+
     async def save_company_research(self, session_id: str, research_data: dict):
         """Save company research data"""
         try:
@@ -949,6 +962,40 @@ async def get_company_insights(session_id: str):
     except Exception as e:
         logger.error(f"Error getting company insights: {e}")
         raise HTTPException(status_code=500, detail="Failed to get company insights")
+
+@app.get("/api/sessions")
+async def get_sessions_by_user(user_id: str):
+    """Get user's sessions, separating incomplete and complete ones."""
+    sessions = await db.get_all_user_sessions(user_id)
+    
+    incomplete_session = None
+    completed_sessions = []
+    
+    for session in sessions:
+        # Get answer count and average score
+        answers = await db.get_session_answers(session["id"])
+        scores = [ans.get("feedback_score", 0) for ans in answers if ans.get("feedback_score")]
+        avg_score = sum(scores) / len(scores) if scores else 0
+        
+        summary = SessionSummary(
+            session_id=session["id"],
+            domain=session["domain"],
+            experience_level=session["experience_level"],
+            interview_type=session["interview_type"],
+            company_name=session.get("company_name"),
+            questions_answered=len(answers),
+            average_score=round(avg_score, 1),
+            duration_minutes=session.get("duration_minutes", 0),
+            created_at=datetime.fromisoformat(session["created_at"]),
+            status=session["status"]
+        )
+        
+        if session["status"] != "completed" and incomplete_session is None:
+            incomplete_session = summary
+        elif session["status"] == "completed":
+            completed_sessions.append(summary)
+            
+    return {"incomplete_session": incomplete_session, "completed_sessions": completed_sessions}
 
 @app.get("/api/users/{user_id}/sessions")
 async def get_user_sessions(user_id: str, limit: int = 10):

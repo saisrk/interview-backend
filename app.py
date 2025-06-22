@@ -184,7 +184,8 @@ class DatabaseManager:
     async def save_question(self, question_data: dict):
         """Save question to database"""
         try:
-            self.supabase.table("interview_questions").insert(question_data).execute()
+            question = self.supabase.table("interview_questions").insert(question_data).execute()
+            return question
         except Exception as e:
             logger.error(f"Error saving question: {e}")
 
@@ -842,8 +843,10 @@ async def submit_answer(session_id: str, answer_request: AnswerRequest):
                 "hints": [],
                 "citations": []
             }
-            await db.save_question(question_data)
+            next_question = await db.save_question(question_data)
             answer_data["status"] = "active"
+            answer_data["question_id"] = next_question.data[0]['id']
+            answer_data["question_order"] = new_question_order
         else:
             # End of interview if no follow-up or max questions reached
             await db.update_session(session_id, {"status": "completed"})

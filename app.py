@@ -47,7 +47,7 @@ class InterviewType(str, Enum):
 
 class InterviewMode(str, Enum):
     PRACTISE = "practise"
-    REAL_TIME = "real-time"
+    REAL_TIME = "interview"
 
 class PromptType(str, Enum):
     INTIAL_QUESTION = "initial_question"

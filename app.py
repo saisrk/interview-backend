@@ -53,16 +53,19 @@ class PromptType(str, Enum):
     INTIAL_QUESTION = "initial_question"
     NEXT_QUESTION = "next_question"
     FEEDBACK = "feedback"
+
 class SessionRequest(BaseModel):
     user_id: Optional[str] = None
-    domain: InterviewDomain
-    experience_level: ExperienceLevel
-    interview_type: InterviewType
+    # For config-based interview
+    domain: Optional[InterviewDomain] = None
+    experience_level: Optional[ExperienceLevel] = None
+    interview_type: Optional[InterviewType] = None
     duration_minutes: int = Field(default=30, ge=15, le=120)
     mode: InterviewMode
     company_name: Optional[str] = None
     job_title: Optional[str] = None
     location: Optional[str] = None
+    job_description: Optional[str] = None
 
 class AnswerRequest(BaseModel):
     session_id: str
@@ -666,30 +669,42 @@ def parse_first_question(sonar_response: Dict) -> Dict:
 @app.post("/api/sessions/start")
 async def start_interview_session(request: SessionRequest, background_tasks: BackgroundTasks):
     """Start a new interview session with Supabase persistence"""
-    config = InterviewConfig(
-        domain=request.domain,
-        difficulty=request.experience_level,
-        duration=request.duration_minutes,
-        session_type=request.interview_type,
-        mode=request.mode,
-        location=request.location
-    )
+    # --- Job Description Support ---
+    if request.job_description:
+        # If job description is provided, only use mode, duration, job_title, and job_description
+        system_prompt = f"""You are an expert interview coach. Prepare an interview for the following job description. Focus all questions and context on the requirements, responsibilities, and skills mentioned.\n\nJob Description:\n{request.job_description}\n\nInterview Mode: {request.mode}\nDuration: {request.duration_minutes} minutes\nJob Title: {request.job_title or 'N/A'}\n\nStart with a challenging but fair opening question that is highly relevant to the job description."""
+        personalized_prompt = "Please begin the interview with a challenging but fair opening question based on the job description."
+        # For config, only use mode and duration
+        config = InterviewConfig(
+            domain=None,
+            difficulty=None,
+            duration=request.duration_minutes,
+            session_type=None,
+            mode=request.mode,
+            location=None
+        )
+    else:
+        # Generate prompt with company focus (config-based)
+        config = InterviewConfig(
+            domain=request.domain,
+            difficulty=request.experience_level,
+            duration=request.duration_minutes,
+            session_type=request.interview_type,
+            mode=request.mode,
+            location=request.location
+        )
+        # Retrieve previous feedback
+        past = supabase.table("interview_sessions").select("id").eq("user_id", request.user_id).order("created_at", desc=True).limit(3).execute()
+        user_sessions = past.data if past else []
+        feedback_answers = []
+        for s in user_sessions:
+            a = supabase.table("interview_answers").select("feedback_improvements").eq("session_id", s['id']).execute()
+            feedback_answers.extend(a.data if a else [])
+        common_weaknesses = extract_weak_areas_from_feedback(feedback_answers)
+        config.known_weak_areas = common_weaknesses
+        system_prompt = generate_prompt(config, PromptType.INTIAL_QUESTION.value)
+        personalized_prompt = "Please begin the interview with a challenging but fair opening question."
 
-    # Retrieve previous feedback
-    past = supabase.table("interview_sessions").select("id").eq("user_id", request.user_id).order("created_at", desc=True).limit(3).execute()
-    user_sessions = past.data if past else []
-    feedback_answers = []
-    for s in user_sessions:
-        a = supabase.table("interview_answers").select("feedback_improvements").eq("session_id", s['id']).execute()
-        feedback_answers.extend(a.data if a else [])
-
-    common_weaknesses = extract_weak_areas_from_feedback(feedback_answers)
-    config.known_weak_areas = common_weaknesses
-
-    # Generate prompt with company focus
-    system_prompt = generate_prompt(config, PromptType.INTIAL_QUESTION.value)
-
-    personalized_prompt = "Please begin the interview with a challenging but fair opening question."
     sonar_response = await ask_sonar(system_prompt, personalized_prompt)
     
     # Parse the first question response
@@ -698,18 +713,23 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
     # Save session data
     session_data = {
         "user_id": request.user_id,
-        "domain": request.domain,
-        "experience_level": request.experience_level,
-        "interview_type": request.interview_type,
         "mode": request.mode,
-        "company_name": request.company_name or None,
-        "job_title": request.job_title or None,
         "duration_minutes": request.duration_minutes,
         "status": "active",
         "created_at": datetime.utcnow().isoformat(),
         "current_question_index": 0,
         "total_questions": 5,
+        "job_title": request.job_title or None,
+        "job_description": request.job_description or None
     }
+    if not request.job_description:
+        session_data.update({
+            "domain": request.domain,
+            "experience_level": request.experience_level,
+            "interview_type": request.interview_type,
+            "company_name": request.company_name or None,
+            "location": request.location or None
+        })
     
     interview_session = supabase.table("interview_sessions").insert(session_data).execute()
 
@@ -718,7 +738,7 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
         "session_id": interview_session.data[0]['id'],
         "question_order": 1,
         "question": first_question_data["main_question"],
-        "difficulty": request.experience_level,
+        "difficulty": request.experience_level if not request.job_description else None,
         "hints": [],  # No hints for the first question by default
         "citations": first_question_data.get("citations", []),
         "context": None,
@@ -1221,7 +1241,6 @@ async def get_transcript(session_id: str):
     except Exception as e:
         logger.error(f"Failed to get transcript: {e}")
         raise HTTPException(status_code=500, detail="Failed to get session transcript")
-
 
 # Weekly improvement digest
 @app.get("/api/users/{user_id}/weekly-report")

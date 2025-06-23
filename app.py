@@ -1107,38 +1107,13 @@ async def get_user_sessions(user_id: str, limit: int = 10):
 @app.post("/api/sessions/{session_id}/end")
 async def end_session(session_id: str):
     """End interview session and generate final report"""
-    session = await db.get_session(session_id)
     answers = await db.get_session_answers(session_id)
     
     # Calculate final metrics
     scores = [ans.get("feedback_score", 0) for ans in answers if ans.get("feedback_score")]
     avg_score = sum(scores) / len(scores) if scores else 0
     
-    # Generate final report using Sonar Pro
-    report_query = f"""
-    Generate a comprehensive interview performance report for a {session['experience_level']} {session['domain']} candidate:
-    
-    Session Details:
-    - Interview Type: {session['interview_type']}
-    - Questions Answered: {len(answers)}
-    - Average Score: {avg_score:.1f}/10
-    - Domain: {session['domain']}
-    
-    Based on the performance data, provide:
-    1. Overall assessment and readiness level
-    2. Top 3 strengths demonstrated
-    3. Priority improvement areas
-    4. Specific next steps and recommendations
-    5. Resources for continued preparation
-    6. Market readiness assessment for this role level
-    
-    Make it actionable and encouraging while being honest about areas for growth.
-    """
-    
     try:
-        sonar_response = await sonar_client.search_and_analyze(report_query)
-        final_report = parse_report_from_response(sonar_response)
-        
         # Update session as completed
         await db.update_session(session_id, {
             "status": "completed",
@@ -1149,7 +1124,6 @@ async def end_session(session_id: str):
         return {
             "session_id": session_id,
             "status": "completed",
-            "final_report": final_report,
             "performance_summary": {
                 "questions_answered": len(answers),
                 "average_score": round(avg_score, 1),

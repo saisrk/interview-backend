@@ -3,7 +3,7 @@ Smart Interview Companion - Backend APIs with FastAPI + Supabase + Perplexity So
 Production-ready implementation with persistent storage
 """
 
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Header
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -51,18 +51,22 @@ class InterviewMode(str, Enum):
 
 class PromptType(str, Enum):
     INTIAL_QUESTION = "initial_question"
+    INTIAL_QUESTION_JD = "initial_question_jd"
     NEXT_QUESTION = "next_question"
     FEEDBACK = "feedback"
+
 class SessionRequest(BaseModel):
     user_id: Optional[str] = None
-    domain: InterviewDomain
-    experience_level: ExperienceLevel
-    interview_type: InterviewType
+    # For config-based interview
+    domain: Optional[InterviewDomain] = None
+    experience_level: Optional[ExperienceLevel] = None
+    interview_type: Optional[InterviewType] = None
     duration_minutes: int = Field(default=30, ge=15, le=120)
     mode: InterviewMode
     company_name: Optional[str] = None
     job_title: Optional[str] = None
     location: Optional[str] = None
+    job_description: Optional[str] = None
 
 class AnswerRequest(BaseModel):
     session_id: str
@@ -110,6 +114,12 @@ class LoginRequest(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
+
+class ChangePasswordRequest(BaseModel):
+    user_id: str
+    old_password: str
+    new_password: str = Field(..., min_length=8)
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -613,6 +623,35 @@ async def logout(current_user: dict = Depends(get_current_user)):
         logger.error(f"Logout error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to logout")
 
+@app.post("/auth/change-password")
+async def change_password(req: ChangePasswordRequest):
+    """Change user password after validating the old password."""
+    try:
+        # Fetch user profile
+        user_profile = supabase.table("auth_users").select("id, password_hash, email").eq("id", req.user_id).execute()
+        if not user_profile.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        user = user_profile.data[0]
+        # Validate old password
+        if not bcrypt.checkpw(req.old_password.encode("utf-8"), user["password_hash"].encode("utf-8")):
+            raise HTTPException(status_code=401, detail="Old password is incorrect")
+        # Hash new password
+        new_password_hash = bcrypt.hashpw(req.new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        # Update password in auth_users table
+        supabase.table("auth_users").update({"password_hash": new_password_hash}).eq("id", req.user_id).execute()
+        # Optionally, update password in Supabase Auth
+        try:
+            supabase.auth.admin.update_user_by_id(req.user_id, {"password": req.new_password})
+        except Exception as e:
+            # Log but don't fail if Supabase Auth update fails
+            logger.error(f"Supabase Auth password update failed: {e}")
+        return {"message": "Password changed successfully"}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Change password error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error during password change")
+
 # ------------------------- 🎯 Core Interview APIs ----------------------------
 
 def parse_first_question(sonar_response: Dict) -> Dict:
@@ -666,30 +705,46 @@ def parse_first_question(sonar_response: Dict) -> Dict:
 @app.post("/api/sessions/start")
 async def start_interview_session(request: SessionRequest, background_tasks: BackgroundTasks):
     """Start a new interview session with Supabase persistence"""
-    config = InterviewConfig(
-        domain=request.domain,
-        difficulty=request.experience_level,
-        duration=request.duration_minutes,
-        session_type=request.interview_type,
-        mode=request.mode,
-        location=request.location
-    )
+    # --- Job Description Support ---
+    if request.job_description:
+        # If job description is provided, only use mode, duration, job_title, and job_description
+        # For config, only use mode and duration
+        config = InterviewConfig(
+            domain=None,
+            difficulty=request.experience_level,
+            duration=request.duration_minutes,
+            session_type=request.interview_type,
+            mode=request.mode,
+            location=request.location,
+            job_title=request.job_title,
+            job_description=request.job_description
+        )
+        system_prompt = generate_prompt(config, PromptType.INTIAL_QUESTION_JD.value)
+        personalized_prompt = "Please begin the interview with a challenging but fair opening question based on the job description."
+    else:
+        # Generate prompt with company focus (config-based)
+        config = InterviewConfig(
+            domain=request.domain,
+            difficulty=request.experience_level,
+            duration=request.duration_minutes,
+            session_type=request.interview_type,
+            mode=request.mode,
+            location=request.location,
+            job_title=None,
+            job_description=None
+        )
+        # Retrieve previous feedback
+        past = supabase.table("interview_sessions").select("id").eq("user_id", request.user_id).order("created_at", desc=True).limit(3).execute()
+        user_sessions = past.data if past else []
+        feedback_answers = []
+        for s in user_sessions:
+            a = supabase.table("interview_answers").select("feedback_improvements").eq("session_id", s['id']).execute()
+            feedback_answers.extend(a.data if a else [])
+        common_weaknesses = extract_weak_areas_from_feedback(feedback_answers)
+        config.known_weak_areas = common_weaknesses
+        system_prompt = generate_prompt(config, PromptType.INTIAL_QUESTION.value)
+        personalized_prompt = "Please begin the interview with a challenging but fair opening question."
 
-    # Retrieve previous feedback
-    past = supabase.table("interview_sessions").select("id").eq("user_id", request.user_id).order("created_at", desc=True).limit(3).execute()
-    user_sessions = past.data if past else []
-    feedback_answers = []
-    for s in user_sessions:
-        a = supabase.table("interview_answers").select("feedback_improvements").eq("session_id", s['id']).execute()
-        feedback_answers.extend(a.data if a else [])
-
-    common_weaknesses = extract_weak_areas_from_feedback(feedback_answers)
-    config.known_weak_areas = common_weaknesses
-
-    # Generate prompt with company focus
-    system_prompt = generate_prompt(config, PromptType.INTIAL_QUESTION.value)
-
-    personalized_prompt = "Please begin the interview with a challenging but fair opening question."
     sonar_response = await ask_sonar(system_prompt, personalized_prompt)
     
     # Parse the first question response
@@ -698,18 +753,23 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
     # Save session data
     session_data = {
         "user_id": request.user_id,
-        "domain": request.domain,
-        "experience_level": request.experience_level,
-        "interview_type": request.interview_type,
         "mode": request.mode,
-        "company_name": request.company_name or None,
-        "job_title": request.job_title or None,
         "duration_minutes": request.duration_minutes,
         "status": "active",
         "created_at": datetime.utcnow().isoformat(),
         "current_question_index": 0,
         "total_questions": 5,
+        "job_title": request.job_title or None,
+        "job_description": request.job_description or None
     }
+    if not request.job_description:
+        session_data.update({
+            "domain": request.domain,
+            "experience_level": request.experience_level,
+            "interview_type": request.interview_type,
+            "company_name": request.company_name or None,
+            "location": request.location or None
+        })
     
     interview_session = supabase.table("interview_sessions").insert(session_data).execute()
 
@@ -718,7 +778,7 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
         "session_id": interview_session.data[0]['id'],
         "question_order": 1,
         "question": first_question_data["main_question"],
-        "difficulty": request.experience_level,
+        "difficulty": request.experience_level if not request.job_description else None,
         "hints": [],  # No hints for the first question by default
         "citations": first_question_data.get("citations", []),
         "context": None,
@@ -1087,38 +1147,13 @@ async def get_user_sessions(user_id: str, limit: int = 10):
 @app.post("/api/sessions/{session_id}/end")
 async def end_session(session_id: str):
     """End interview session and generate final report"""
-    session = await db.get_session(session_id)
     answers = await db.get_session_answers(session_id)
     
     # Calculate final metrics
     scores = [ans.get("feedback_score", 0) for ans in answers if ans.get("feedback_score")]
     avg_score = sum(scores) / len(scores) if scores else 0
     
-    # Generate final report using Sonar Pro
-    report_query = f"""
-    Generate a comprehensive interview performance report for a {session['experience_level']} {session['domain']} candidate:
-    
-    Session Details:
-    - Interview Type: {session['interview_type']}
-    - Questions Answered: {len(answers)}
-    - Average Score: {avg_score:.1f}/10
-    - Domain: {session['domain']}
-    
-    Based on the performance data, provide:
-    1. Overall assessment and readiness level
-    2. Top 3 strengths demonstrated
-    3. Priority improvement areas
-    4. Specific next steps and recommendations
-    5. Resources for continued preparation
-    6. Market readiness assessment for this role level
-    
-    Make it actionable and encouraging while being honest about areas for growth.
-    """
-    
     try:
-        sonar_response = await sonar_client.search_and_analyze(report_query)
-        final_report = parse_report_from_response(sonar_response)
-        
         # Update session as completed
         await db.update_session(session_id, {
             "status": "completed",
@@ -1129,7 +1164,6 @@ async def end_session(session_id: str):
         return {
             "session_id": session_id,
             "status": "completed",
-            "final_report": final_report,
             "performance_summary": {
                 "questions_answered": len(answers),
                 "average_score": round(avg_score, 1),
@@ -1221,7 +1255,6 @@ async def get_transcript(session_id: str):
     except Exception as e:
         logger.error(f"Failed to get transcript: {e}")
         raise HTTPException(status_code=500, detail="Failed to get session transcript")
-
 
 # Weekly improvement digest
 @app.get("/api/users/{user_id}/weekly-report")

@@ -3,7 +3,7 @@ Smart Interview Companion - Backend APIs with FastAPI + Supabase + Perplexity So
 Production-ready implementation with persistent storage
 """
 
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Header
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -51,6 +51,7 @@ class InterviewMode(str, Enum):
 
 class PromptType(str, Enum):
     INTIAL_QUESTION = "initial_question"
+    INTIAL_QUESTION_JD = "initial_question_jd"
     NEXT_QUESTION = "next_question"
     FEEDBACK = "feedback"
 
@@ -113,6 +114,12 @@ class LoginRequest(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
+
+class ChangePasswordRequest(BaseModel):
+    user_id: str
+    old_password: str
+    new_password: str = Field(..., min_length=8)
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -616,6 +623,35 @@ async def logout(current_user: dict = Depends(get_current_user)):
         logger.error(f"Logout error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to logout")
 
+@app.post("/auth/change-password")
+async def change_password(req: ChangePasswordRequest):
+    """Change user password after validating the old password."""
+    try:
+        # Fetch user profile
+        user_profile = supabase.table("auth_users").select("id, password_hash, email").eq("id", req.user_id).execute()
+        if not user_profile.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        user = user_profile.data[0]
+        # Validate old password
+        if not bcrypt.checkpw(req.old_password.encode("utf-8"), user["password_hash"].encode("utf-8")):
+            raise HTTPException(status_code=401, detail="Old password is incorrect")
+        # Hash new password
+        new_password_hash = bcrypt.hashpw(req.new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        # Update password in auth_users table
+        supabase.table("auth_users").update({"password_hash": new_password_hash}).eq("id", req.user_id).execute()
+        # Optionally, update password in Supabase Auth
+        try:
+            supabase.auth.admin.update_user_by_id(req.user_id, {"password": req.new_password})
+        except Exception as e:
+            # Log but don't fail if Supabase Auth update fails
+            logger.error(f"Supabase Auth password update failed: {e}")
+        return {"message": "Password changed successfully"}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Change password error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error during password change")
+
 # ------------------------- 🎯 Core Interview APIs ----------------------------
 
 def parse_first_question(sonar_response: Dict) -> Dict:
@@ -672,17 +708,19 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
     # --- Job Description Support ---
     if request.job_description:
         # If job description is provided, only use mode, duration, job_title, and job_description
-        system_prompt = f"""You are an expert interview coach. Prepare an interview for the following job description. Focus all questions and context on the requirements, responsibilities, and skills mentioned.\n\nJob Description:\n{request.job_description}\n\nInterview Mode: {request.mode}\nDuration: {request.duration_minutes} minutes\nJob Title: {request.job_title or 'N/A'}\n\nStart with a challenging but fair opening question that is highly relevant to the job description."""
-        personalized_prompt = "Please begin the interview with a challenging but fair opening question based on the job description."
         # For config, only use mode and duration
         config = InterviewConfig(
             domain=None,
-            difficulty=None,
+            difficulty=request.experience_level,
             duration=request.duration_minutes,
-            session_type=None,
+            session_type=request.interview_type,
             mode=request.mode,
-            location=None
+            location=request.location,
+            job_title=request.job_title,
+            job_description=request.job_description
         )
+        system_prompt = generate_prompt(config, PromptType.INTIAL_QUESTION_JD.value)
+        personalized_prompt = "Please begin the interview with a challenging but fair opening question based on the job description."
     else:
         # Generate prompt with company focus (config-based)
         config = InterviewConfig(
@@ -691,7 +729,9 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
             duration=request.duration_minutes,
             session_type=request.interview_type,
             mode=request.mode,
-            location=request.location
+            location=request.location,
+            job_title=None,
+            job_description=None
         )
         # Retrieve previous feedback
         past = supabase.table("interview_sessions").select("id").eq("user_id", request.user_id).order("created_at", desc=True).limit(3).execute()

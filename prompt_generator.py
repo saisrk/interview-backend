@@ -10,6 +10,8 @@ class InterviewConfig:
     session_type: Literal['technical', 'hr']
     mode: Literal['practice', 'real-time']
     location: str  # New field for location
+    job_title: str
+    job_description: str
 
 @dataclass
 class AnswerConfig:
@@ -196,7 +198,7 @@ def generate_initial_prompt(config: InterviewConfig) -> str:
     prompt = f"""# Interview Session Configuration
 
 ## Role & Context
-You are an experienced {domain} interviewer conducting a {config.session_type.value} interview. This is a {config.mode.value} session designed to evaluate a {difficulty.lower()} candidate in the {config.location} region.
+You are an experienced {domain} interviewer with 180IQ conducting a {config.session_type.value} interview. This is a {config.mode.value} session designed to evaluate a {difficulty.lower()} candidate in the {config.location} region.
 
 ## Session Parameters
 - **Domain**: {domain}
@@ -249,6 +251,32 @@ Evaluate candidates based on {DIFFICULTY_CONTEXT[config.difficulty.value]['expec
 Begin the interview when ready. Remember to adapt your questions based on the candidate's responses and maintain the specified difficulty level throughout the session."""
 
     return prompt
+
+
+def generate_initial_prompt_jd(config: InterviewConfig) -> str:
+    system_prompt = f"""You are an experienced {config.job_title} interviewer with 180IQ conducting a {config.session_type.value} interview. This is a {config.mode.value} session designed to evaluate a candidate in the {config.location} region. 
+
+## Session Parameters
+- **Domain**: {config.job_title}
+- **Difficulty Level**: {config.difficulty}
+- **Duration**: {config.duration} minutes
+- **Session Type**: {config.session_type.value.capitalize()}
+- **Mode**: {config.mode.value.capitalize()}
+- **Location**: {config.location}
+
+## Candidate Expectations
+Evaluate candidates based on {DIFFICULTY_CONTEXT[config.difficulty]['expectation']}. Present {DIFFICULTY_CONTEXT[config.difficulty]['complexity']} and assess their {DIFFICULTY_CONTEXT[config.difficulty]['evaluation']}.
+
+### Mode-Specific Instructions
+- **Pacing**: {MODE_INSTRUCTIONS[config.mode.value]['pacing']}
+- **Feedback**: {MODE_INSTRUCTIONS[config.mode.value]['feedback']}
+- **Assistance**: {MODE_INSTRUCTIONS[config.mode.value]['assistance']}
+- **Atmosphere**: {MODE_INSTRUCTIONS[config.mode.value]['atmosphere']}
+
+Prepare an interview for the following job description. Focus all questions and context on the requirements, responsibilities, and skills mentioned.\n\nJob Description:\n{config.job_description}\n\nInterview Mode: {config.mode.value}\nDuration: {config.duration} minutes\nJob Title: {config.job_title or 'N/A'}\n\nStart with a challenging but fair opening question that is highly relevant to the job description.
+Format your response as follows:\n\n---\n[INTRODUCTION]\nYour intro text here.\n\n[QUESTION]\nYour first interview question here.\n---"""
+
+    return system_prompt
 
 
 def generate_next_prompt(config: InterviewConfig, previous_question: str, candidate_response: str) -> str:
@@ -311,6 +339,8 @@ Generate the next interview question now."""
 def generate_prompt(config: InterviewConfig | AnswerConfig, type: str, previous_question: str = None, candidate_response: str = None) -> str:
     if type == 'initial_question':
         return generate_initial_prompt(config)
+    elif type == 'initial_question_jd':
+        return generate_initial_prompt_jd(config)
     elif type == 'next_question':
         if not previous_question or not candidate_response:
             raise ValueError("Previous question and candidate response are required for next question generation")

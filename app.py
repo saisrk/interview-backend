@@ -768,7 +768,6 @@ async def start_interview_session(request: SessionRequest, background_tasks: Bac
             "experience_level": request.experience_level,
             "interview_type": request.interview_type,
             "company_name": request.company_name or None,
-            "location": request.location or None
         })
     
     interview_session = supabase.table("interview_sessions").insert(session_data).execute()

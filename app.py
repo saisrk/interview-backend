@@ -92,7 +92,7 @@ class FeedbackResponse(BaseModel):
 
 class SessionSummary(BaseModel):
     session_id: str
-    domain: str
+    domain: Optional[str]
     experience_level: str
     interview_type: str
     company_name: Optional[str]
@@ -101,6 +101,8 @@ class SessionSummary(BaseModel):
     duration_minutes: int
     created_at: datetime
     status: str
+    job_title: Optional[str]
+    job_description: Optional[str]
 
 class AuthRequest(BaseModel):
     email: str = Field(..., description="User's email address")
@@ -1040,7 +1042,7 @@ async def get_sessions_by_user(user_id: str):
         
         summary = SessionSummary(
             session_id=session["id"],
-            domain=session["domain"],
+            domain=session.get("domain", None),
             experience_level=session["experience_level"],
             interview_type=session["interview_type"],
             company_name=session.get("company_name"),
@@ -1048,7 +1050,9 @@ async def get_sessions_by_user(user_id: str):
             average_score=round(avg_score, 1),
             duration_minutes=session.get("duration_minutes", 0),
             created_at=datetime.fromisoformat(session["created_at"]),
-            status=session["status"]
+            status=session["status"],
+            job_title=session.get("job_title"),
+            job_description=session.get("job_description"),
         )
         
         if session["status"] != "completed" and incomplete_session is None:

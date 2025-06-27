@@ -7,8 +7,8 @@ class InterviewConfig:
     domain: str
     difficulty: Literal['entry', 'mid', 'senior', 'lead']
     duration: int  # in minutes
-    session_type: Literal['technical', 'hr']
-    mode: Literal['practice', 'real-time']
+    session_type: Literal['technical', 'behavioral']
+    mode: Literal['practice', 'interview']
     location: str  # New field for location
     job_title: str
     job_description: str
@@ -65,54 +65,66 @@ LOCATION_CONTEXT = {
 LOCATION_QUESTION_TYPES = {
     'north-america': {
         'technical': ['System design', 'Scalability', 'Cloud architecture', 'Agile practices'],
-        'hr': ['Leadership style', 'Conflict resolution', 'Innovation mindset']
+        'behavioral': ['Leadership style', 'Conflict resolution', 'Innovation mindset'],
+        'case_study': ['Business growth case', 'Market entry strategy', 'Product launch scenario', 'Operational scaling', 'Turnaround strategy']
     },
     'europe': {
         'technical': ['Software architecture', 'Design patterns', 'Testing methodologies', 'Security practices'],
-        'hr': ['Team collaboration', 'Process improvement', 'Quality focus']
+        'behavioral': ['Team collaboration', 'Process improvement', 'Quality focus'],
+        'case_study': ['Regulatory compliance scenario', 'Market expansion case', 'Sustainability challenge', 'Digital transformation', 'Cross-border operations']
     },
     'asia-pacific': {
         'technical': ['Technical depth', 'Implementation details', 'Performance optimization'],
-        'hr': ['Team dynamics', 'Cultural awareness', 'Process adherence']
+        'behavioral': ['Team dynamics', 'Cultural awareness', 'Process adherence'],
+        'case_study': ['Emerging market entry', 'Cost optimization', 'Localization strategy', 'Supply chain challenge', 'Growth hacking scenario']
     },
     'india': {
         'technical': ['Algorithm complexity', 'System design', 'Implementation details'],
-        'hr': ['Team leadership', 'Cross-functional collaboration', 'Process improvement']
+        'behavioral': ['Team leadership', 'Cross-functional collaboration', 'Process improvement'],
+        'case_study': ['Startup scaling', 'Market penetration', 'Resource allocation', 'Digital adoption', 'Customer acquisition case']
     }
 }
 
 DOMAIN_QUESTION_TYPES = {
     'software_engineering': {
         'technical': ['Coding problems', 'System design', 'Data structures & algorithms', 'Architecture patterns', 'Debugging scenarios'],
-        'hr': ['Technical leadership', 'Code review processes', 'Team collaboration', 'Project management']
+        'behavioral': ['Technical leadership', 'Code review processes', 'Team collaboration', 'Project management'],
+        'case_study': ['System outage response', 'Legacy system migration', 'Tech debt prioritization', 'Scaling architecture', 'DevOps transformation']
     },
     'data_science': {
         'technical': ['Statistical analysis', 'Machine learning algorithms', 'Data manipulation', 'Model evaluation', 'A/B testing'],
-        'hr': ['Data storytelling', 'Stakeholder communication', 'Project prioritization', 'Cross-functional collaboration']
+        'behavioral': ['Data storytelling', 'Stakeholder communication', 'Project prioritization', 'Cross-functional collaboration'],
+        'case_study': ['Churn prediction project', 'Fraud detection scenario', 'Personalization engine', 'Data pipeline optimization', 'Business impact analysis']
     },
     'product_management': {
         'technical': ['Product strategy', 'Feature prioritization', 'Metrics & KPIs', 'User research', 'Roadmap planning'],
-        'hr': ['Stakeholder management', 'Cross-team coordination', 'Decision making', 'Conflict resolution']
+        'behavioral': ['Stakeholder management', 'Cross-team coordination', 'Decision making', 'Conflict resolution'],
+        'case_study': ['Go-to-market plan', 'Feature launch', 'User adoption challenge', 'Pivot decision', 'Competitive analysis']
     },
     'marketing': {
         'technical': ['Campaign strategy', 'Analytics & attribution', 'Growth hacking', 'Content strategy', 'SEO/SEM'],
-        'hr': ['Creative collaboration', 'Brand management', 'Budget planning', 'Team leadership']
+        'behavioral': ['Creative collaboration', 'Brand management', 'Budget planning', 'Team leadership'],
+        'case_study': ['Brand repositioning', 'Market entry campaign', 'Crisis communication', 'Viral growth case', 'Multi-channel strategy']
     },
     'finance': {
         'technical': ['Financial modeling', 'Risk assessment', 'Valuation methods', 'Investment analysis', 'Regulatory compliance'],
-        'hr': ['Client relationship management', 'Team leadership', 'Presentation skills', 'Ethical decision making']
+        'behavioral': ['Client relationship management', 'Team leadership', 'Presentation skills', 'Ethical decision making'],
+        'case_study': ['M&A scenario', 'Cost reduction plan', 'IPO readiness', 'Investment portfolio review', 'Financial turnaround']
     },
     'sales': {
         'technical': ['Sales methodology', 'Pipeline management', 'CRM usage', 'Forecasting', 'Deal negotiation'],
-        'hr': ['Relationship building', 'Team motivation', 'Goal setting', 'Customer success']
+        'behavioral': ['Relationship building', 'Team motivation', 'Goal setting', 'Customer success'],
+        'case_study': ['Enterprise deal close', 'Sales process redesign', 'Territory expansion', 'Quota recovery', 'Channel conflict resolution']
     },
     'design': {
         'technical': ['Design systems', 'User research', 'Prototyping', 'Usability testing', 'Design thinking'],
-        'hr': ['Creative collaboration', 'Feedback incorporation', 'Design leadership', 'Stakeholder presentation']
+        'behavioral': ['Creative collaboration', 'Feedback incorporation', 'Design leadership', 'Stakeholder presentation'],
+        'case_study': ['Product redesign', 'Accessibility challenge', 'Brand refresh', 'User journey mapping', 'Design sprint case']
     },
     'operations': {
         'technical': ['Process optimization', 'Supply chain management', 'Quality control', 'Data analysis', 'Strategic planning'],
-        'hr': ['Change management', 'Team coordination', 'Crisis management', 'Performance improvement']
+        'behavioral': ['Change management', 'Team coordination', 'Crisis management', 'Performance improvement'],
+        'case_study': ['Logistics bottleneck', 'Cost optimization', 'Business continuity', 'Vendor management', 'Operational scaling']
     }
 }
 
@@ -146,7 +158,7 @@ MODE_INSTRUCTIONS = {
         'assistance': 'Offer guidance and alternative approaches when needed',
         'atmosphere': 'Create a supportive, learning-focused environment'
     },
-    'real-time': {
+    'interview': {
         'pacing': 'Maintain realistic interview timing and pressure',
         'feedback': 'Save detailed feedback for the end of the session',
         'assistance': 'Provide minimal hints, simulating real interview conditions',
@@ -156,7 +168,7 @@ MODE_INSTRUCTIONS = {
 
 SESSION_TYPE_INSTRUCTIONS = {
     'technical': 'Focus on technical competency, problem-solving methodology, and domain expertise',
-    'hr': 'Focus on behavioral scenarios, soft skills, cultural fit, and interpersonal abilities'
+    'behavioral': 'Focus on behavioral scenarios, soft skills, cultural fit, and interpersonal abilities'
 }
 
 def generate_initial_prompt(config: InterviewConfig) -> str:

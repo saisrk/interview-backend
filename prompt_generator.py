@@ -168,7 +168,8 @@ MODE_INSTRUCTIONS = {
 
 SESSION_TYPE_INSTRUCTIONS = {
     'technical': 'Focus on technical competency, problem-solving methodology, and domain expertise',
-    'behavioral': 'Focus on behavioral scenarios, soft skills, cultural fit, and interpersonal abilities'
+    'behavioral': 'Focus on behavioral scenarios, soft skills, cultural fit, and interpersonal abilities',
+    'case_study': 'Focus on real-world business scenarios, strategic thinking, problem analysis, and actionable recommendations'
 }
 
 def generate_initial_prompt(config: InterviewConfig) -> str:

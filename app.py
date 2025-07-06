@@ -270,7 +270,7 @@ class SonarProClient:
         self.api_key = PERPLEXITY_API_KEY
         self.base_url = "https://api.perplexity.ai"
         
-    async def search_and_analyze(self, query: str, model: str = "llama-3.1-sonar-large-128k-online", return_citations: bool = True) -> Dict:
+    async def search_and_analyze(self, query: str, model: str = "sonar-pro", return_citations: bool = True) -> Dict:
         """Enhanced Sonar Pro search with real-time web data"""
         try:
             # Use OpenAI's async client for Perplexity endpoint
